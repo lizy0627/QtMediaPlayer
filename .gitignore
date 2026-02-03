@@ -1,0 +1,96 @@
+# Qt 项目忽略文件
+
+# C++ 编译产物
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Qt 特定文件
+*.pro.user
+*.pro.user.*
+*.qmake.stash
+*.autosave
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+Makefile*
+*.Debug
+*.Release
+
+# 构建目录
+build/
+build-*/
+debug/
+release/
+Debug/
+Release/
+x64/
+x86/
+
+# Qt Creator
+*.creator
+*.creator.user
+*.includes
+*.files
+*.config
+*.cflags
+*.cxxflags
+
+# IDE 文件
+.vscode/
+.idea/
+*.suo
+*.user
+*.ncb
+*.sdf
+*.opensdf
+*.vcproj
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# 临时文件
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+*.log
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编译缓存
+.qmake.cache
+.qmake.vars
+
+# 文档生成
+doc/html/
+doc/latex/
+
+# 测试文件
+test_*.cpp
+*_test.cpp
+
+# 打包文件
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# 不忽略的文件
+!.gitignore
+!README.md
+!*.pro
+!*.h
+!*.cpp
+!*.ui
+!assets/
