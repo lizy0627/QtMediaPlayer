@@ -117,6 +117,7 @@ private:
         m_prevLine = new QLabel(lyricContainer);
         m_prevLine->setAlignment(Qt::AlignCenter);
         m_prevLine->setWordWrap(true);
+        m_prevLine->setMinimumWidth(600);
         m_prevLine->setStyleSheet(
             "QLabel { "
             "   color: rgba(255, 255, 255, 0.4); "
@@ -131,6 +132,7 @@ private:
         m_currentLine = new QLabel(lyricContainer);
         m_currentLine->setAlignment(Qt::AlignCenter);
         m_currentLine->setWordWrap(true);
+        m_currentLine->setMinimumWidth(600);
         m_currentLine->setStyleSheet(
             "QLabel { "
             "   color: #64b5f6; "
@@ -157,6 +159,7 @@ private:
         m_nextLine = new QLabel(lyricContainer);
         m_nextLine->setAlignment(Qt::AlignCenter);
         m_nextLine->setWordWrap(true);
+        m_nextLine->setMinimumWidth(600);
         m_nextLine->setStyleSheet(
             "QLabel { "
             "   color: rgba(255, 255, 255, 0.4); "

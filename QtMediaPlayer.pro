@@ -22,6 +22,7 @@ HEADERS += \
     lyricparser.h \
     lyricwidget.h \
     menu.h \
+    onlinemusicsearch.h \
     playhistory.h \
     spectrumwidget.h \
     videoplayer.h \

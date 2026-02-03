@@ -27,10 +27,13 @@
 #include <QPixmap>
 #include <QImage>
 #include <QEvent>
+#include <QMenu>
+#include <QAction>
 #include "spectrumwidget.h"
 #include "lyricwidget.h"
 #include "lyricparser.h"
 #include "lyricdownloader.h"
+#include "onlinemusicsearch.h"
 
 // 枚举播放模式
 enum PlayMode
@@ -66,6 +69,10 @@ private:
     QSlider *m_progressSlider;      // 进度条
     QLabel *m_currentTime;          // 当前时间
     QLabel *m_totalTime;            // 总时间
+    
+    // 音量控制
+    QSlider *m_volumeSlider;        // 音量滑块
+    QLabel *m_volumeLabel;          // 音量标签
 
     // 媒体组件（Qt6）
     QMediaPlayer *m_player;         // 媒体播放器
@@ -89,6 +96,15 @@ public:
         m_audioOutput = new QAudioOutput(this);
         m_player->setAudioOutput(m_audioOutput);
         
+        // 设置音量（0.0 到 1.0，默认设置为 0.8）
+        m_audioOutput->setVolume(0.8);
+        
+        // 调试信息：检查音频输出设备
+        qDebug() << "=== 音频播放器初始化 ===";
+        qDebug() << "音频输出设备:" << m_audioOutput->device().description();
+        qDebug() << "初始音量:" << m_audioOutput->volume();
+        qDebug() << "是否静音:" << m_audioOutput->isMuted();
+        
         // 初始化歌词下载器
         m_lyricDownloader = new LyricDownloader(this);
 
@@ -109,6 +125,8 @@ public:
 
         // 初始状态
         updatePlayModeUI();
+        
+        qDebug() << "=== 音频播放器初始化完成 ===";
     }
 
     // 添加文件到播放列表
@@ -235,12 +253,103 @@ private:
         playlistLayout->setContentsMargins(5, 15, 5, 5);
 
         m_playListWidget = new QListWidget(playlistGroup);
+        m_playListWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_playListWidget, &QListWidget::customContextMenuRequested, 
+                this, &AudioPlayer::showPlaylistContextMenu);
         playlistLayout->addWidget(m_playListWidget);
 
         // 添加文件按钮
-        QPushButton *addButton = new QPushButton("添加音乐", playlistGroup);
+        QHBoxLayout *addButtonLayout = new QHBoxLayout();
+        
+        QPushButton *addButton = new QPushButton("📁 添加本地音乐", playlistGroup);
+        addButton->setStyleSheet(
+            "QPushButton { "
+            "   background-color: #0d47a1; "
+            "   color: white; "
+            "   border: none; "
+            "   padding: 10px; "
+            "   border-radius: 5px; "
+            "   font-weight: bold; "
+            "}"
+            "QPushButton:hover { "
+            "   background-color: #1565c0; "
+            "}"
+            "QPushButton:pressed { "
+            "   background-color: #0a3d91; "
+            "}"
+        );
         connect(addButton, &QPushButton::clicked, this, &AudioPlayer::onAddFiles);
-        playlistLayout->addWidget(addButton);
+        
+        QPushButton *searchButton = new QPushButton("🔍 在线搜索", playlistGroup);
+        searchButton->setStyleSheet(
+            "QPushButton { "
+            "   background-color: #1565c0; "
+            "   color: white; "
+            "   border: none; "
+            "   padding: 10px; "
+            "   border-radius: 5px; "
+            "   font-weight: bold; "
+            "}"
+            "QPushButton:hover { "
+            "   background-color: #1976d2; "
+            "}"
+            "QPushButton:pressed { "
+            "   background-color: #0d47a1; "
+            "}"
+        );
+        connect(searchButton, &QPushButton::clicked, this, &AudioPlayer::onSearchOnline);
+        
+        addButtonLayout->addWidget(addButton);
+        addButtonLayout->addWidget(searchButton);
+        playlistLayout->addLayout(addButtonLayout);
+        
+        // 删除和测试按钮
+        QHBoxLayout *actionButtonLayout = new QHBoxLayout();
+        
+        QPushButton *deleteButton = new QPushButton("🗑️ 删除选中", playlistGroup);
+        deleteButton->setStyleSheet(
+            "QPushButton { "
+            "   background-color: #d32f2f; "
+            "   color: white; "
+            "   border: none; "
+            "   padding: 8px; "
+            "   border-radius: 5px; "
+            "   font-weight: bold; "
+            "   font-size: 9pt; "
+            "}"
+            "QPushButton:hover { "
+            "   background-color: #f44336; "
+            "}"
+            "QPushButton:pressed { "
+            "   background-color: #c62828; "
+            "}"
+        );
+        connect(deleteButton, &QPushButton::clicked, this, &AudioPlayer::deleteSelectedSong);
+        
+        // 添加测试按钮
+        QPushButton *testButton = new QPushButton("🔧 测试音频", playlistGroup);
+        testButton->setStyleSheet(
+            "QPushButton { "
+            "   background-color: #f57c00; "
+            "   color: white; "
+            "   border: none; "
+            "   padding: 8px; "
+            "   border-radius: 5px; "
+            "   font-weight: bold; "
+            "   font-size: 9pt; "
+            "}"
+            "QPushButton:hover { "
+            "   background-color: #fb8c00; "
+            "}"
+            "QPushButton:pressed { "
+            "   background-color: #e65100; "
+            "}"
+        );
+        connect(testButton, &QPushButton::clicked, this, &AudioPlayer::testAudio);
+        
+        actionButtonLayout->addWidget(deleteButton);
+        actionButtonLayout->addWidget(testButton);
+        playlistLayout->addLayout(actionButtonLayout);
 
         rightLayout->addWidget(playlistGroup);
 
@@ -406,6 +515,57 @@ private:
         
         buttonContainerLayout->addLayout(buttonLayout);
         controlLayout->addLayout(buttonContainerLayout);
+        
+        // 音量控制
+        QHBoxLayout *volumeLayout = new QHBoxLayout();
+        volumeLayout->setSpacing(10);
+        
+        QLabel *volumeIcon = new QLabel("🔊", controlGroup);
+        volumeIcon->setObjectName("volumeIcon");  // 设置对象名称方便查找
+        volumeIcon->setStyleSheet("font-size: 16pt;");
+        volumeIcon->setFixedWidth(30);
+        
+        m_volumeSlider = new QSlider(Qt::Horizontal, controlGroup);
+        m_volumeSlider->setRange(0, 100);
+        m_volumeSlider->setValue(80);  // 默认音量80%
+        m_volumeSlider->setToolTip("音量控制");
+        m_volumeSlider->setStyleSheet(
+            "QSlider::groove:horizontal { "
+            "   border: 1px solid #444; "
+            "   height: 8px; "
+            "   background: #1e1e1e; "
+            "   border-radius: 4px; "
+            "}"
+            "QSlider::handle:horizontal { "
+            "   background: #64b5f6; "
+            "   border: 2px solid #0d47a1; "
+            "   width: 18px; "
+            "   margin: -5px 0; "
+            "   border-radius: 9px; "
+            "}"
+            "QSlider::handle:horizontal:hover { "
+            "   background: #90caf9; "
+            "}"
+            "QSlider::sub-page:horizontal { "
+            "   background: #0d47a1; "
+            "   border-radius: 4px; "
+            "}"
+        );
+        
+        m_volumeLabel = new QLabel("80%", controlGroup);
+        m_volumeLabel->setFixedWidth(45);
+        m_volumeLabel->setAlignment(Qt::AlignCenter);
+        m_volumeLabel->setStyleSheet(
+            "color: #64b5f6; "
+            "font-weight: bold; "
+            "font-size: 10pt;"
+        );
+        
+        volumeLayout->addWidget(volumeIcon);
+        volumeLayout->addWidget(m_volumeSlider);
+        volumeLayout->addWidget(m_volumeLabel);
+        
+        controlLayout->addLayout(volumeLayout);
 
         rightLayout->addWidget(controlGroup);
 
@@ -468,12 +628,18 @@ private:
         connect(m_btnLoopList, &QToolButton::clicked, [this](){ setPlayMode(ListLoop); });
         connect(m_btnLoopSingle, &QToolButton::clicked, [this](){ setPlayMode(SingleLoop); });
         connect(m_btnRandom, &QToolButton::clicked, [this](){ setPlayMode(Random); });
+        
+        // 音量控制
+        connect(m_volumeSlider, &QSlider::valueChanged, this, &AudioPlayer::onVolumeChanged);
 
         // 播放器信号（Qt6）
         connect(m_player, &QMediaPlayer::positionChanged, this, &AudioPlayer::updatePosition);
         connect(m_player, &QMediaPlayer::durationChanged, this, &AudioPlayer::updateDuration);
         connect(m_player, &QMediaPlayer::playbackStateChanged, this, &AudioPlayer::updatePlayButton);
         connect(m_player, &QMediaPlayer::mediaStatusChanged, this, &AudioPlayer::onMediaStatusChanged);
+        
+        // 错误处理
+        connect(m_player, &QMediaPlayer::errorOccurred, this, &AudioPlayer::onPlayerError);
 
         // 连接频谱可视化
         m_spectrumWidget->setMediaPlayer(m_player);
@@ -545,6 +711,267 @@ private slots:
         if (!files.isEmpty())
             addFiles(files);
     }
+    
+    // 在线搜索音乐
+    void onSearchOnline()
+    {
+        OnlineMusicSearch* searchDialog = new OnlineMusicSearch(this);
+        
+        // 连接歌曲选择信号
+        connect(searchDialog, &OnlineMusicSearch::songSelected, this, [this](const SongInfo& song) {
+            // 添加在线歌曲到播放列表
+            QUrl songUrl(song.url);
+            
+            if (!songUrl.isValid()) {
+                QMessageBox::warning(this, "错误", "歌曲URL无效！");
+                return;
+            }
+            
+            // 添加到播放列表
+            m_playlist.append(songUrl);
+            
+            // 显示歌曲信息
+            QString displayName = QString("%1 - %2").arg(song.name).arg(song.artist);
+            m_playListWidget->addItem(displayName);
+            
+            // 自动播放
+            if (m_player->playbackState() != QMediaPlayer::PlayingState) {
+                m_currentIndex = m_playlist.size() - 1;
+                play();
+            }
+            
+            QMessageBox::information(this, "成功", 
+                QString("已添加：%1\n艺术家：%2\n\n提示：在线播放需要网络连接")
+                .arg(song.name).arg(song.artist));
+        });
+        
+        searchDialog->exec();
+        delete searchDialog;
+    }
+    
+    // 测试音频功能
+    void testAudio()
+    {
+        QString info = "=== 音频系统诊断 ===\n\n";
+        
+        // 检查音频输出
+        info += "【音频输出设备】\n";
+        if (m_audioOutput) {
+            info += QString("设备: %1\n").arg(m_audioOutput->device().description());
+            info += QString("音量: %1%\n").arg(m_audioOutput->volume() * 100, 0, 'f', 0);
+            info += QString("静音: %1\n\n").arg(m_audioOutput->isMuted() ? "是" : "否");
+        } else {
+            info += "错误：音频输出未初始化！\n\n";
+        }
+        
+        // 检查播放器状态
+        info += "【播放器状态】\n";
+        info += QString("播放状态: ");
+        switch (m_player->playbackState()) {
+            case QMediaPlayer::StoppedState:
+                info += "停止\n";
+                break;
+            case QMediaPlayer::PlayingState:
+                info += "播放中\n";
+                break;
+            case QMediaPlayer::PausedState:
+                info += "暂停\n";
+                break;
+        }
+        
+        info += QString("媒体状态: ");
+        switch (m_player->mediaStatus()) {
+            case QMediaPlayer::NoMedia:
+                info += "无媒体\n";
+                break;
+            case QMediaPlayer::LoadingMedia:
+                info += "加载中\n";
+                break;
+            case QMediaPlayer::LoadedMedia:
+                info += "已加载\n";
+                break;
+            case QMediaPlayer::BufferingMedia:
+                info += "缓冲中\n";
+                break;
+            case QMediaPlayer::BufferedMedia:
+                info += "已缓冲\n";
+                break;
+            case QMediaPlayer::EndOfMedia:
+                info += "播放结束\n";
+                break;
+            case QMediaPlayer::InvalidMedia:
+                info += "无效媒体\n";
+                break;
+            default:
+                info += "未知\n";
+        }
+        
+        info += QString("当前源: %1\n").arg(m_player->source().toString());
+        info += QString("时长: %1ms\n").arg(m_player->duration());
+        info += QString("位置: %1ms\n\n").arg(m_player->position());
+        
+        // 检查播放列表
+        info += "【播放列表】\n";
+        info += QString("歌曲数量: %1\n").arg(m_playlist.size());
+        info += QString("当前索引: %1\n\n").arg(m_currentIndex);
+        
+        // 检查错误
+        if (m_player->error() != QMediaPlayer::NoError) {
+            info += "【错误信息】\n";
+            info += QString("错误代码: %1\n").arg(m_player->error());
+            info += QString("错误描述: %1\n\n").arg(m_player->errorString());
+        }
+        
+        // 建议
+        info += "【建议】\n";
+        if (m_audioOutput && m_audioOutput->volume() < 0.01) {
+            info += "⚠️ 音量过低，请调高音量滑块\n";
+        }
+        if (m_audioOutput && m_audioOutput->isMuted()) {
+            info += "⚠️ 音频已静音，请取消静音\n";
+        }
+        if (m_playlist.isEmpty()) {
+            info += "⚠️ 播放列表为空，请添加音乐文件\n";
+        }
+        if (m_player->error() != QMediaPlayer::NoError) {
+            info += "⚠️ 播放器出现错误，请检查文件格式\n";
+        }
+        
+        QMessageBox::information(this, "音频系统诊断", info);
+    }
+    
+    // 删除选中的歌曲
+    void deleteSelectedSong()
+    {
+        int selectedRow = m_playListWidget->currentRow();
+        
+        if (selectedRow < 0) {
+            QMessageBox::warning(this, "提示", "请先选择要删除的歌曲！");
+            return;
+        }
+        
+        // 确认删除
+        QListWidgetItem* item = m_playListWidget->item(selectedRow);
+        QString songName = item->text();
+        
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, 
+            "确认删除", 
+            QString("确定要删除这首歌曲吗？\n\n%1").arg(songName),
+            QMessageBox::Yes | QMessageBox::No
+        );
+        
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+        
+        // 如果删除的是正在播放的歌曲
+        bool wasPlaying = (selectedRow == m_currentIndex && 
+                          m_player->playbackState() == QMediaPlayer::PlayingState);
+        
+        // 从播放列表中删除
+        m_playlist.removeAt(selectedRow);
+        delete m_playListWidget->takeItem(selectedRow);
+        
+        // 更新当前索引
+        if (selectedRow < m_currentIndex) {
+            // 删除的歌曲在当前播放歌曲之前，索引减1
+            m_currentIndex--;
+        } else if (selectedRow == m_currentIndex) {
+            // 删除的是当前播放的歌曲
+            m_player->stop();
+            
+            if (!m_playlist.isEmpty()) {
+                // 如果还有歌曲，播放下一首
+                if (m_currentIndex >= m_playlist.size()) {
+                    m_currentIndex = 0;
+                }
+                
+                if (wasPlaying) {
+                    play();
+                }
+            } else {
+                // 播放列表为空
+                m_currentIndex = -1;
+                m_lyricWidget->clear();
+            }
+        }
+        
+        qDebug() << "已删除歌曲，当前索引:" << m_currentIndex << "播放列表大小:" << m_playlist.size();
+    }
+    
+    // 显示播放列表右键菜单
+    void showPlaylistContextMenu(const QPoint& pos)
+    {
+        QListWidgetItem* item = m_playListWidget->itemAt(pos);
+        if (!item) {
+            return;
+        }
+        
+        QMenu contextMenu(this);
+        contextMenu.setStyleSheet(
+            "QMenu { "
+            "   background-color: #2b2b2b; "
+            "   color: white; "
+            "   border: 1px solid #444; "
+            "}"
+            "QMenu::item { "
+            "   padding: 8px 25px; "
+            "}"
+            "QMenu::item:selected { "
+            "   background-color: #0d47a1; "
+            "}"
+        );
+        
+        QAction* playAction = contextMenu.addAction("▶️ 播放");
+        QAction* deleteAction = contextMenu.addAction("🗑️ 删除");
+        contextMenu.addSeparator();
+        QAction* clearAllAction = contextMenu.addAction("🗑️ 清空播放列表");
+        
+        QAction* selectedAction = contextMenu.exec(m_playListWidget->mapToGlobal(pos));
+        
+        if (selectedAction == playAction) {
+            int row = m_playListWidget->row(item);
+            m_currentIndex = row;
+            play();
+        } else if (selectedAction == deleteAction) {
+            m_playListWidget->setCurrentItem(item);
+            deleteSelectedSong();
+        } else if (selectedAction == clearAllAction) {
+            clearPlaylist();
+        }
+    }
+    
+    // 清空播放列表
+    void clearPlaylist()
+    {
+        if (m_playlist.isEmpty()) {
+            QMessageBox::information(this, "提示", "播放列表已经是空的！");
+            return;
+        }
+        
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, 
+            "确认清空", 
+            QString("确定要清空整个播放列表吗？\n\n共 %1 首歌曲").arg(m_playlist.size()),
+            QMessageBox::Yes | QMessageBox::No
+        );
+        
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+        
+        // 停止播放
+        m_player->stop();
+        
+        // 清空列表
+        m_playlist.clear();
+        m_playListWidget->clear();
+        m_currentIndex = -1;
+        m_lyricWidget->clear();
+        
+        qDebug() << "播放列表已清空";
+    }
 
     // 切换播放/暂停
     void togglePlay()
@@ -564,14 +991,36 @@ private slots:
     {
         if (m_playlist.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_playlist.size())
             return;
-            
-        m_player->setSource(m_playlist[m_currentIndex]);
+        
+        // 只有当源不同时才重新设置源
+        if (m_player->source() != m_playlist[m_currentIndex]) {
+            m_player->setSource(m_playlist[m_currentIndex]);
+            // 加载歌词
+            loadLyrics();
+        }
+        
+        // 确保音频输出已设置且音量正确
+        if (m_player->audioOutput() == nullptr) {
+            m_player->setAudioOutput(m_audioOutput);
+            qDebug() << "重新设置音频输出";
+        }
+        
+        // 确保音量不为0
+        qreal currentVolume = m_audioOutput->volume();
+        qDebug() << "当前音量:" << currentVolume;
+        if (currentVolume < 0.01) {
+            m_audioOutput->setVolume(0.8);
+            m_volumeSlider->setValue(80);
+            qDebug() << "音量过低，已重置为80%";
+        }
+        
+        qDebug() << "开始播放:" << m_playlist[m_currentIndex].toString();
+        qDebug() << "播放器状态:" << m_player->playbackState();
+        qDebug() << "媒体状态:" << m_player->mediaStatus();
+        
         m_player->play();
         m_spectrumWidget->setPlaying(true);
         m_playListWidget->setCurrentRow(m_currentIndex);
-        
-        // 加载歌词
-        loadLyrics();
         
         m_btnPlayPause->setIcon(QIcon("./assets/pause.png"));
         m_btnPlayPause->setIconSize(QSize(48, 48));
@@ -707,6 +1156,28 @@ private slots:
     {
         m_player->setPosition(position);
     }
+    
+    // 音量改变
+    void onVolumeChanged(int value)
+    {
+        qreal volume = value / 100.0;  // 转换为 0.0 到 1.0
+        m_audioOutput->setVolume(volume);
+        m_volumeLabel->setText(QString("%1%").arg(value));
+        
+        // 更新音量图标
+        QLabel* volumeIcon = this->findChild<QLabel*>("volumeIcon");
+        if (volumeIcon) {
+            if (value == 0) {
+                volumeIcon->setText("🔇");
+            } else if (value < 30) {
+                volumeIcon->setText("🔈");
+            } else if (value < 70) {
+                volumeIcon->setText("🔉");
+            } else {
+                volumeIcon->setText("🔊");
+            }
+        }
+    }
 
     // 更新播放模式UI
     void updatePlayModeUI()
@@ -719,14 +1190,51 @@ private slots:
     // 媒体状态变化（Qt6）
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status)
     {
+        qDebug() << "媒体状态变化:" << status;
+        
         if (status == QMediaPlayer::EndOfMedia) {
             // 根据播放模式决定下一步
             if (m_playMode == SingleLoop) {
-                play(); // 重新播放当前曲目
+                // 单曲循环：重置到开头并继续播放
+                m_player->setPosition(0);
+                m_player->play();
             } else {
                 next(); // 播放下一首
             }
+        } else if (status == QMediaPlayer::InvalidMedia) {
+            QMessageBox::warning(this, "错误", "无效的媒体文件！\n请检查文件格式是否支持。");
+        } else if (status == QMediaPlayer::LoadedMedia) {
+            qDebug() << "媒体加载成功，时长:" << m_player->duration() << "ms";
         }
+    }
+    
+    // 播放器错误处理
+    void onPlayerError(QMediaPlayer::Error error, const QString &errorString)
+    {
+        qDebug() << "播放器错误:" << error << errorString;
+        
+        QString errorMsg;
+        switch (error) {
+            case QMediaPlayer::NoError:
+                return;
+            case QMediaPlayer::ResourceError:
+                errorMsg = "资源错误：无法打开媒体文件\n" + errorString;
+                break;
+            case QMediaPlayer::FormatError:
+                errorMsg = "格式错误：不支持的媒体格式\n" + errorString;
+                break;
+            case QMediaPlayer::NetworkError:
+                errorMsg = "网络错误：无法访问网络资源\n" + errorString;
+                break;
+            case QMediaPlayer::AccessDeniedError:
+                errorMsg = "访问被拒绝：没有权限访问该文件\n" + errorString;
+                break;
+            default:
+                errorMsg = "未知错误：" + errorString;
+                break;
+        }
+        
+        QMessageBox::critical(this, "播放错误", errorMsg);
     }
 };
 
