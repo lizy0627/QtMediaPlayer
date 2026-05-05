@@ -1,0 +1,436 @@
+#include "videoplayer.h"
+
+#include <QCursor>
+#include <QEvent>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QSplitter>
+#include <QVBoxLayout>
+#include <QVideoWidget>
+
+#include "aichatpanel.h"
+#include "aichatwidget.h"
+#include "authdialogcontroller.h"
+#include "authservice.h"
+#include "captureservice.h"
+#include "danmakucontroller.h"
+#include "danmakuinputbar.h"
+#include "danmakuoverlay.h"
+#include "danmakupanel.h"
+#include "danmakurepository.h"
+#include "mediahistory.h"
+#include "onlinevideoservice.h"
+#include "usersession.h"
+#include "videocontrolbar.h"
+#include "videoplaybackcontroller.h"
+#include "videoplayercontroller.h"
+
+VideoPlayerWidget::VideoPlayerWidget(QWidget* parent,
+                                     UserSession* userSession,
+                                     AuthService* authService,
+                                     AuthDialogController* authDialogController,
+                                     MediaHistoryService* historyService)
+    : QObject(parent)
+    , m_parent(parent)
+    , m_historyService(historyService)
+{
+    createLayout();
+
+    m_userSession = userSession ? userSession : new UserSession(this);
+    m_authService = authService ? authService : new AuthService(m_userSession, this);
+    m_authDialogController = authDialogController
+        ? authDialogController
+        : new AuthDialogController(m_authService, this);
+
+    createServices();
+    connectSignals();
+
+    if (m_authService) {
+        m_authService->initialize();
+    }
+
+    if (m_controlBar && m_controller) {
+        m_controlBar->setVolumeValue(m_controller->volume());
+        m_controlBar->setSpeedValue(m_controller->speed());
+    }
+    if (m_controlBar && m_danmakuController) {
+        m_controlBar->setDanmakuEnabled(m_danmakuController->isEnabled());
+    }
+}
+
+VideoPlayerWidget::~VideoPlayerWidget()
+{
+    delete m_danmakuRepository;
+}
+
+void VideoPlayerWidget::open(const QString& filePath, bool localFile)
+{
+    if (m_controller) {
+        m_controller->open(filePath, localFile);
+    }
+}
+
+void VideoPlayerWidget::openAtPosition(const QString& filePath, qint64 position)
+{
+    if (m_controller) {
+        m_controller->openAtPosition(filePath, position);
+    }
+}
+
+void VideoPlayerWidget::toggle()
+{
+    if (m_controller) {
+        m_controller->togglePlayback();
+    }
+}
+
+void VideoPlayerWidget::jump(bool forward, int ms)
+{
+    if (m_controller) {
+        m_controller->jump(forward, ms);
+    }
+}
+
+void VideoPlayerWidget::setVolume(int volumeValue)
+{
+    if (m_controller) {
+        m_controller->setVolume(volumeValue);
+    }
+}
+
+int VideoPlayerWidget::volume() const
+{
+    return m_controller ? m_controller->volume() : 0;
+}
+
+bool VideoPlayerWidget::isPlaying() const
+{
+    return m_controller && m_controller->isPlaying();
+}
+
+void VideoPlayerWidget::setSpeed(double speedValue)
+{
+    if (m_controller) {
+        m_controller->setSpeed(speedValue);
+    }
+}
+
+double VideoPlayerWidget::speed() const
+{
+    return m_controller ? m_controller->speed() : 1.0;
+}
+
+void VideoPlayerWidget::setControlsVisible(bool visible)
+{
+    if (m_controlBar) {
+        m_controlBar->setVisible(visible);
+    }
+}
+
+void VideoPlayerWidget::pause()
+{
+    if (m_controller) {
+        m_controller->pause();
+    }
+}
+
+void VideoPlayerWidget::play()
+{
+    if (m_controller) {
+        m_controller->play();
+    }
+}
+
+void VideoPlayerWidget::showMyDanmakuRecords()
+{
+    if (m_controller) {
+        m_controller->showMyDanmakuRecords(m_parent);
+    }
+}
+
+void VideoPlayerWidget::showError(const QString& message)
+{
+    QMessageBox::critical(m_parent, QStringLiteral("播放错误"), message);
+}
+
+void VideoPlayerWidget::showWarning(const QString& title, const QString& message)
+{
+    QMessageBox::warning(m_parent, title, message);
+}
+
+void VideoPlayerWidget::showInfo(const QString& title, const QString& message)
+{
+    QMessageBox::information(m_parent, title, message);
+}
+
+void VideoPlayerWidget::showScreenshotResult(const QString& path)
+{
+    const QFileInfo fileInfo(path);
+    QMessageBox::information(
+        m_parent,
+        QStringLiteral("截图成功"),
+        QStringLiteral("截图已保存到：\n\n%1\n\n保存目录：\n%2")
+            .arg(fileInfo.fileName(), fileInfo.absolutePath()));
+}
+
+void VideoPlayerWidget::showRecordingStarted(const QString& directory, bool willTranscodeToVideo)
+{
+    if (m_controlBar) {
+        m_controlBar->setRecordProcessing(false);
+        m_controlBar->setRecording(true);
+    }
+
+    QString message =
+        QStringLiteral("\u65e0\u58f0\u753b\u9762\u5f55\u5236\u5df2\u5f00\u59cb\u3002\n\n\u4fdd\u5b58\u4f4d\u7f6e\uff1a\n%1\n\n\u53ea\u6355\u83b7\u753b\u9762\uff0c\u4e0d\u5305\u542b\u97f3\u9891\u3002\n\u518d\u6b21\u70b9\u51fb\u753b\u9762\u5f55\u5236\u6309\u94ae\u53ef\u505c\u6b62\u5f55\u5236\u3002").arg(directory);
+    message += willTranscodeToVideo
+        ? QStringLiteral("\n\u505c\u6b62\u540e\u5c06\u5f02\u6b65\u8f6c\u6362\u4e3a\u65e0\u58f0 MP4 \u753b\u9762\u89c6\u9891\u3002")
+        : QStringLiteral("\n\u5f53\u524d\u672a\u68c0\u6d4b\u5230 FFmpeg\uff0c\u5c06\u4fdd\u7559\u4e3a PNG \u753b\u9762\u5e27\u5e8f\u5217\u3002");
+
+    showInfo(QStringLiteral("\u5f00\u59cb\u753b\u9762\u5f55\u5236"), message);
+}
+
+void VideoPlayerWidget::showRecordingResult(const QString& path)
+{
+    if (m_controlBar) {
+        m_controlBar->setRecordProcessing(false);
+        m_controlBar->setRecording(false);
+    }
+
+    const QFileInfo fileInfo(path);
+    if (fileInfo.isFile()) {
+        QMessageBox::information(
+            m_parent,
+            QStringLiteral("\u65e0\u58f0\u753b\u9762\u5f55\u5236\u5b8c\u6210"),
+            QStringLiteral("\u65e0\u58f0\u753b\u9762\u89c6\u9891\u5df2\u751f\u6210\uff1a\n\n%1\n\n\u6587\u4ef6\u5927\u5c0f\uff1a%2 MB")
+                .arg(fileInfo.absoluteFilePath())
+                .arg(QString::number(fileInfo.size() / 1024.0 / 1024.0, 'f', 2)));
+        return;
+    }
+
+    QMessageBox::information(
+        m_parent,
+        QStringLiteral("\u753b\u9762\u5f55\u5236\u5b8c\u6210"),
+        QStringLiteral("\u753b\u9762\u5e27\u5df2\u4fdd\u5b58\u5230\uff1a\n\n%1").arg(path));
+}
+
+void VideoPlayerWidget::showRecordingError(const QString& message)
+{
+    if (m_controlBar) {
+        m_controlBar->setRecordProcessing(false);
+        m_controlBar->setRecording(false);
+    }
+
+    QMessageBox::warning(m_parent, QStringLiteral("\u5f55\u5236\u5931\u8d25"), message);
+}
+
+bool VideoPlayerWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if ((watched == m_video || watched == m_videoContainer)
+        && m_danmakuController
+        && m_video
+        && (event->type() == QEvent::Resize
+            || event->type() == QEvent::Show
+            || event->type() == QEvent::Move)) {
+        m_danmakuController->setOverlayGeometry(m_video->rect());
+    }
+
+    return QObject::eventFilter(watched, event);
+}
+
+void VideoPlayerWidget::createLayout()
+{
+    m_mainLayout = new QVBoxLayout(m_parent);
+    m_mainLayout->setContentsMargins(0, 0, 0, 0);
+    m_mainLayout->setSpacing(0);
+
+    m_splitter = new QSplitter(Qt::Horizontal, m_parent);
+    m_splitter->setHandleWidth(1);
+    m_splitter->setStyleSheet(
+        "QSplitter::handle { background: rgba(102, 126, 234, 0.3); }"
+        "QSplitter::handle:hover { background: rgba(102, 126, 234, 0.6); }");
+
+    m_videoContainer = new QWidget(m_parent);
+    m_videoContainer->setStyleSheet("background: black;");
+    QVBoxLayout* videoLayout = new QVBoxLayout(m_videoContainer);
+    videoLayout->setContentsMargins(0, 0, 0, 0);
+    videoLayout->setSpacing(0);
+
+    m_video = new QVideoWidget(m_videoContainer);
+    m_video->setStyleSheet(
+        "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+        " stop:0 rgba(26, 32, 44, 1),"
+        " stop:0.5 rgba(45, 55, 72, 1),"
+        " stop:1 rgba(26, 32, 44, 1));");
+    videoLayout->addWidget(m_video);
+
+    m_danmakuDisplay = new DanmakuPanel(m_parent);
+    m_danmakuDisplay->setMinimumWidth(300);
+
+    m_aiChatPanel = new AiChatPanel(m_video, m_parent, this);
+    m_aiChatWidget = m_aiChatPanel->widget();
+    m_aiChatWidget->hide();
+
+    m_splitter->addWidget(m_videoContainer);
+    m_splitter->addWidget(m_danmakuDisplay);
+    m_splitter->addWidget(m_aiChatWidget);
+    m_splitter->setStretchFactor(0, 5);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setStretchFactor(2, 0);
+
+    m_mainLayout->addWidget(m_splitter);
+
+    m_controlBar = new VideoControlBar(m_parent);
+    m_mainLayout->addWidget(m_controlBar);
+
+    m_danmakuInput = new DanmakuInputBar(m_parent);
+    m_mainLayout->addWidget(m_danmakuInput);
+
+    m_parent->setLayout(m_mainLayout);
+}
+
+void VideoPlayerWidget::createServices()
+{
+    m_playbackController = new VideoPlaybackController(this);
+    m_playbackController->setVideoOutput(m_video);
+
+    if (!m_historyService) {
+        m_historyService = new MediaHistoryService(this);
+    }
+    m_captureService = new CaptureService(m_video, this);
+    if (m_aiChatPanel) {
+        m_aiChatPanel->setCaptureService(m_captureService);
+    }
+    m_onlineVideoService = new OnlineVideoService(this);
+    m_danmakuRepository = new DanmakuRepository();
+
+    m_danmakuWidget = new DanmakuOverlay(m_video);
+    m_danmakuWidget->setGeometry(m_video->rect());
+    m_danmakuWidget->raise();
+    m_danmakuWidget->show();
+    m_danmakuWidget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+
+    m_danmakuController = new DanmakuController(m_danmakuRepository,
+                                                m_danmakuWidget,
+                                                m_danmakuDisplay,
+                                                this);
+
+    m_controller = new VideoPlayerController(m_parent,
+                                             m_playbackController,
+                                             m_historyService,
+                                             m_captureService,
+                                             m_danmakuController,
+                                             m_onlineVideoService,
+                                             m_userSession,
+                                             this);
+
+    if (m_danmakuInput) {
+        m_danmakuInput->setUserSession(m_userSession);
+    }
+
+    m_video->installEventFilter(this);
+    m_videoContainer->installEventFilter(this);
+}
+
+void VideoPlayerWidget::connectSignals()
+{
+    connect(m_controlBar, &VideoControlBar::playPauseRequested, m_controller, &VideoPlayerController::togglePlayback);
+    connect(m_controlBar, &VideoControlBar::screenshotRequested, m_controller, &VideoPlayerController::requestScreenshot);
+    connect(m_controlBar, &VideoControlBar::recordRequested, m_controller, &VideoPlayerController::toggleRecording);
+    connect(m_controlBar, &VideoControlBar::danmakuToggleRequested, m_controller, &VideoPlayerController::toggleDanmaku);
+    connect(m_controlBar, &VideoControlBar::volumeChanged, m_controller, &VideoPlayerController::setVolume);
+    connect(m_controlBar, &VideoControlBar::speedChanged, m_controller, &VideoPlayerController::setSpeed);
+    connect(m_controlBar, &VideoControlBar::progressJumpRequested, m_controller, &VideoPlayerController::seekToPosition);
+
+    connect(m_controlBar, &VideoControlBar::searchOnlineRequested, this, [this]() {
+        m_controller->showOnlineSearchDialog(m_parent);
+    });
+    connect(m_controlBar, &VideoControlBar::historyRequested, this, [this]() {
+        m_controller->showHistoryDialog(m_parent);
+    });
+    connect(m_controlBar, &VideoControlBar::myDanmakuRequested, this, [this]() {
+        m_controller->showMyDanmakuRecords(m_parent);
+    });
+    connect(m_controlBar, &VideoControlBar::loginRequested, this, [this]() {
+        if (m_authDialogController) {
+            m_authDialogController->showUserMenu(m_parent, QCursor::pos());
+        }
+    });
+    connect(m_controlBar, &VideoControlBar::aiPanelToggled, this, &VideoPlayerWidget::updateAiPanelLayout);
+
+    connect(m_controller, &VideoPlayerController::playbackStateChanged, m_controlBar, &VideoControlBar::setPlaying);
+    connect(m_controller, &VideoPlayerController::positionChanged, m_controlBar, &VideoControlBar::setProgress);
+    connect(m_controller, &VideoPlayerController::durationChanged, m_controlBar, &VideoControlBar::setDuration);
+    connect(m_controller, &VideoPlayerController::volumeChanged, m_controlBar, &VideoControlBar::setVolumeValue);
+    connect(m_controller, &VideoPlayerController::speedChanged, m_controlBar, &VideoControlBar::setSpeedValue);
+    connect(m_controller, &VideoPlayerController::danmakuEnabledChanged, m_controlBar, &VideoControlBar::setDanmakuEnabled);
+    connect(m_controller, &VideoPlayerController::playbackError, this, &VideoPlayerWidget::showError);
+    connect(m_controller, &VideoPlayerController::warningRequested, this, &VideoPlayerWidget::showWarning);
+    connect(m_controller, &VideoPlayerController::infoRequested, this, &VideoPlayerWidget::showInfo);
+
+    connect(m_captureService, &CaptureService::screenshotSaved, this, &VideoPlayerWidget::showScreenshotResult);
+    connect(m_captureService, &CaptureService::captureFailed, this, [this](const QString& message) {
+        showWarning(QStringLiteral("截图失败"), message);
+    });
+    connect(m_captureService, &CaptureService::recordingStarted, this, &VideoPlayerWidget::showRecordingStarted);
+    connect(m_captureService,
+            &CaptureService::recordingProcessingChanged,
+            m_controlBar,
+            &VideoControlBar::setRecordProcessing);
+    connect(m_captureService, &CaptureService::recordingFinished, this, &VideoPlayerWidget::showRecordingResult);
+    connect(m_captureService, &CaptureService::recordingFailed, this, &VideoPlayerWidget::showRecordingError);
+
+    connect(m_danmakuInput, &DanmakuInputBar::danmakuSubmitted, this, [this](const QString& content, const QString& color, int type) {
+        m_controller->sendDanmaku(content, color, type);
+    });
+    connect(m_danmakuInput, &DanmakuInputBar::loginRequired, m_authService, &AuthService::requestLogin);
+
+    connect(m_authService, &AuthService::loginRequired, this, [this]() {
+        if (m_authDialogController) {
+            m_authDialogController->showLoginDialog(m_parent);
+        }
+    });
+    connect(m_userSession, &UserSession::sessionChanged, this, [this](const SessionState& state) {
+        m_controlBar->setLoggedInUser(state.username);
+    });
+
+    connect(m_danmakuController, &DanmakuController::danmakuAdded, m_danmakuWidget, &DanmakuOverlay::showDanmaku);
+    connect(m_danmakuController, &DanmakuController::danmakuAdded, m_danmakuDisplay, &DanmakuPanel::appendDanmaku);
+
+    if (m_authService) {
+        m_authService->setDanmakuCountProvider([this](const QString& username) {
+            return m_danmakuController ? m_danmakuController->userDanmakuCount(username) : 0;
+        });
+    }
+
+    m_controlBar->setLoggedInUser(m_userSession ? m_userSession->currentUser() : QString());
+}
+
+void VideoPlayerWidget::updateAiPanelLayout(bool visible)
+{
+    if (!m_aiChatWidget || !m_splitter) {
+        return;
+    }
+
+    m_aiChatWidget->setVisible(visible);
+
+    QList<int> sizes = m_splitter->sizes();
+    int total = 0;
+    for (int size : sizes) {
+        total += size;
+    }
+
+    if (!visible) {
+        if (m_danmakuDisplay && m_danmakuDisplay->isVisible()) {
+            m_splitter->setSizes({total * 80 / 100, total * 20 / 100, 0});
+        } else {
+            m_splitter->setSizes({total, 0, 0});
+        }
+        return;
+    }
+
+    if (m_danmakuDisplay && m_danmakuDisplay->isVisible()) {
+        m_splitter->setSizes({total * 65 / 100, total * 15 / 100, total * 20 / 100});
+    } else {
+        m_splitter->setSizes({total * 80 / 100, 0, total * 20 / 100});
+    }
+}

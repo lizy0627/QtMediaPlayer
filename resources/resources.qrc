@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="assets/about.png">../assets/about.png</file>
+        <file alias="assets/audio.png">../assets/audio.png</file>
+        <file alias="assets/disc.png">../assets/disc.png</file>
+        <file alias="assets/exit.png">../assets/exit.png</file>
+        <file alias="assets/logo.png">../assets/logo.png</file>
+        <file alias="assets/open.png">../assets/open.png</file>
+        <file alias="assets/pause.png">../assets/pause.png</file>
+        <file alias="assets/play.png">../assets/play.png</file>
+        <file alias="assets/pre.png">../assets/pre.png</file>
+        <file alias="assets/stop.png">../assets/stop.png</file>
+        <file alias="assets/video.png">../assets/video.png</file>
+        <file>styles/app.qss</file>
+    </qresource>
+</RCC>
