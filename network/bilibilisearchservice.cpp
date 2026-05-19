@@ -19,11 +19,13 @@ QString bilibiliUserAgent()
 BilibiliSearchService::BilibiliSearchService(QObject* parent)
     : QObject(parent)
     , m_networkClient(new NetworkClient(this))
+    , m_searchCache(QStringLiteral("video"))
 {
     connect(m_networkClient,
             &NetworkClient::requestFinished,
             this,
             &BilibiliSearchService::onRequestFinished);
+    m_searchCache.init();
 }
 
 QVariantMap BilibiliSearchService::bilibiliHeaders()
@@ -47,6 +49,17 @@ void BilibiliSearchService::searchVideo(const QString& keyword)
         return;
     }
 
+    emit searchStarted(trimmedKeyword);
+
+    // 相同关键词优先复用本地缓存，缓存命中时不再发起网络请求。
+    if (m_searchCache.hasValidCache(trimmedKeyword)) {
+        const QString cachedJson = m_searchCache.getCache(trimmedKeyword);
+        if (!cachedJson.isEmpty()
+            && emitSearchResultsFromJson(cachedJson.toUtf8())) {
+            return;
+        }
+    }
+
     QUrl url(QStringLiteral("https://api.bilibili.com/x/web-interface/search/type"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("search_type"), QStringLiteral("video"));
@@ -54,11 +67,11 @@ void BilibiliSearchService::searchVideo(const QString& keyword)
     query.addQueryItem(QStringLiteral("page"), QStringLiteral("1"));
     url.setQuery(query);
 
-    emit searchStarted(trimmedKeyword);
     RequestOptions options;
     options.headers = bilibiliHeaders();
     options.timeout = 30000;
     options.retry = 2;
+    m_pendingSearchKeyword = trimmedKeyword;
     m_pendingSearchRequestId = m_networkClient->get(url, options);
 }
 
@@ -68,9 +81,18 @@ void BilibiliSearchService::onRequestFinished(const QString& requestId, const Ne
         return;
     }
 
+    const QString pendingKeyword = m_pendingSearchKeyword;
     m_pendingSearchRequestId.clear();
+    m_pendingSearchKeyword.clear();
+    const QString staleSearchJson = m_searchCache.getCache(pendingKeyword);
 
     if (!result.ok()) {
+        if (!staleSearchJson.isEmpty()
+            && emitSearchResultsFromJson(staleSearchJson.toUtf8(),
+                                         QStringLiteral("（缓存数据可能不是最新）"))) {
+            return;
+        }
+
         QString message = result.errorMessage;
         if (message.isEmpty()) {
             message = QStringLiteral("视频搜索请求失败。");
@@ -79,17 +101,31 @@ void BilibiliSearchService::onRequestFinished(const QString& requestId, const Ne
         return;
     }
 
+    if (emitSearchResultsFromJson(result.body)) {
+        m_searchCache.saveCache(pendingKeyword, QString::fromUtf8(result.body));
+    }
+}
+
+bool BilibiliSearchService::emitSearchResultsFromJson(const QByteArray& data,
+                                                      const QString& statusSuffix)
+{
     QString errorMessage;
-    const QList<VideoInfo> videos = parseSearchResults(result.body, &errorMessage);
+    const QList<VideoInfo> videos = parseSearchResults(data, &errorMessage);
     if (!errorMessage.isEmpty()) {
         emit searchFailed({QStringLiteral("video.search.parse"), errorMessage, false});
-        return;
+        return false;
     }
 
-    const QString statusMessage = videos.isEmpty()
+    QString statusMessage = videos.isEmpty()
         ? QStringLiteral("未找到相关视频。")
-        : QStringLiteral("找到 %1 个视频，双击可发送到播放器，也可以在浏览器中打开。").arg(videos.size());
+        : QStringLiteral("找到 %1 个视频，双击可发送到播放器，也可以在浏览器中打开。")
+              .arg(videos.size());
+    if (!statusSuffix.isEmpty()) {
+        statusMessage += statusSuffix;
+    }
+
     emit searchFinished(videos, statusMessage);
+    return true;
 }
 
 QString BilibiliSearchService::removeHtmlTags(const QString& html)

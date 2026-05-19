@@ -9,6 +9,7 @@
 #include <QStringList>
 
 #include "networkclient.h"
+#include "searchcache.h"
 
 class QWidget;
 class NetworkClient;
@@ -54,6 +55,8 @@ private slots:
     void onRequestFinished(const QString& requestId, const NetworkResult& result);
 
 private:
+    bool emitSearchResultsFromJson(const QByteArray& data,
+                                   const QString& statusSuffix = QString());
     QList<SongInfo> parseSearchResults(const QByteArray& data,
                                        QString* statusMessage,
                                        bool* parseOk) const;
@@ -63,7 +66,9 @@ private:
                                   bool* parseOk) const;
 
     NetworkClient* m_networkClient = nullptr;
+    SearchCache m_searchCache;
     QString m_pendingSearchRequestId;
+    QString m_pendingSearchKeyword;
     QHash<QString, QString> m_pendingResolveRequestIds;
 };
 

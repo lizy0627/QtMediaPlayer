@@ -78,6 +78,7 @@ SOURCES += \
     network/onlinevideoservice.cpp \
     playlistmodel.cpp \
     playlistpanel.cpp \
+    searchcache.cpp \
     spectrumpanel.cpp \
     usersession.cpp \
     userrepository.cpp \
@@ -145,6 +146,7 @@ HEADERS += \
     onlinevideosearch.h \
     playlistmodel.h \
     playlistpanel.h \
+    searchcache.h \
     spectrumpanel.h \
     spectrumwidget.h \
     usersession.h \

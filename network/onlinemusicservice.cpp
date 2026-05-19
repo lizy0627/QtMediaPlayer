@@ -20,9 +20,11 @@ void emitSearchFailure(OnlineMusicService* service, const ServiceError& error)
 OnlineMusicService::OnlineMusicService(QObject* parent)
     : QObject(parent)
     , m_networkClient(new NetworkClient(this))
+    , m_searchCache(QStringLiteral("music"))
 {
     connect(m_networkClient, &NetworkClient::requestFinished,
             this, &OnlineMusicService::onRequestFinished);
+    m_searchCache.init();
 }
 
 void OnlineMusicService::searchMusic(QString keyword)
@@ -45,7 +47,24 @@ void OnlineMusicService::search(const QString& keyword)
 
 void OnlineMusicService::searchSongsAsync(const QString& keyword)
 {
-    const QString encodedKeyword = QString::fromLatin1(QUrl::toPercentEncoding(keyword));
+    const QString trimmedKeyword = keyword.trimmed();
+    if (trimmedKeyword.isEmpty()) {
+        emitSearchFailure(this, {QStringLiteral("music.search.empty_keyword"),
+                                 QStringLiteral("请输入搜索关键词。"),
+                                 false});
+        return;
+    }
+
+    // 相同关键词优先复用本地缓存，避免重复网络请求。
+    if (m_searchCache.hasValidCache(trimmedKeyword)) {
+        const QString cachedJson = m_searchCache.getCache(trimmedKeyword);
+        if (!cachedJson.isEmpty()
+            && emitSearchResultsFromJson(cachedJson.toUtf8())) {
+            return;
+        }
+    }
+
+    const QString encodedKeyword = QString::fromLatin1(QUrl::toPercentEncoding(trimmedKeyword));
     const QString apiUrl = QStringLiteral("https://music.163.com/api/search/get/web?s=%1&type=1&offset=0&limit=30")
         .arg(encodedKeyword);
 
@@ -58,6 +77,7 @@ void OnlineMusicService::searchSongsAsync(const QString& keyword)
     options.headers = headers;
     options.timeout = 15000;
     options.retry = 1;
+    m_pendingSearchKeyword = trimmedKeyword;
     m_pendingSearchRequestId = m_networkClient->get(QUrl(apiUrl), options);
 }
 
@@ -115,9 +135,19 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
         return;
     }
 
+    const QString pendingKeyword = m_pendingSearchKeyword;
     m_pendingSearchRequestId.clear();
+    m_pendingSearchKeyword.clear();
+
+    const QString staleSearchJson = m_searchCache.getCache(pendingKeyword);
 
     if (!result.ok()) {
+        if (!staleSearchJson.isEmpty()
+            && emitSearchResultsFromJson(staleSearchJson.toUtf8(),
+                                         QStringLiteral("（缓存数据可能不是最新）"))) {
+            return;
+        }
+
         const QString message = QStringLiteral("搜索失败：%1。")
                                     .arg(result.errorMessage.isEmpty()
                                              ? QStringLiteral("网络请求未成功")
@@ -126,21 +156,30 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
         return;
     }
 
+    if (emitSearchResultsFromJson(result.body)) {
+        m_searchCache.saveCache(pendingKeyword, QString::fromUtf8(result.body));
+    }
+}
+
+bool OnlineMusicService::emitSearchResultsFromJson(const QByteArray& data,
+                                                   const QString& statusSuffix)
+{
     QString statusMessage;
     bool parseOk = false;
-    QList<SongInfo> songs = parseSearchResults(result.body, &statusMessage, &parseOk);
+    QList<SongInfo> songs = parseSearchResults(data, &statusMessage, &parseOk);
     if (!parseOk) {
         const QString message = statusMessage.isEmpty()
             ? QStringLiteral("解析搜索结果失败。")
             : statusMessage;
         emitSearchFailure(this, {QStringLiteral("music.search.parse"), message, false});
-        return;
+        return false;
     }
 
-    if (songs.isEmpty()) {
-        if (statusMessage.isEmpty()) {
-            statusMessage = QStringLiteral("未找到相关歌曲。");
-        }
+    if (songs.isEmpty() && statusMessage.isEmpty()) {
+        statusMessage = QStringLiteral("未找到相关歌曲。");
+    }
+    if (!statusSuffix.isEmpty()) {
+        statusMessage += statusSuffix;
     }
 
     QStringList legacyResults;
@@ -151,6 +190,7 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
     }
     emit searchFinished(legacyResults);
     emit searchFinished(songs, statusMessage);
+    return true;
 }
 
 QList<SongInfo> OnlineMusicService::parseSearchResults(const QByteArray& data,

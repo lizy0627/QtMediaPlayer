@@ -7,6 +7,7 @@
 
 #include "networkclient.h"
 #include "onlinevideotypes.h"
+#include "searchcache.h"
 
 class BilibiliSearchService : public QObject
 {
@@ -29,10 +30,14 @@ private:
     static QVariantMap bilibiliHeaders();
     static QString removeHtmlTags(const QString& html);
     static QString formatPlayCount(int count);
+    bool emitSearchResultsFromJson(const QByteArray& data,
+                                   const QString& statusSuffix = QString());
     QList<VideoInfo> parseSearchResults(const QByteArray& data, QString* errorMessage) const;
 
     NetworkClient* m_networkClient = nullptr;
+    SearchCache m_searchCache;
     QString m_pendingSearchRequestId;
+    QString m_pendingSearchKeyword;
 };
 
 #endif // BILIBILISEARCHSERVICE_H
