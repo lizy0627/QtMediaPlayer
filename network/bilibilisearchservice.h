@@ -28,6 +28,7 @@ private slots:
 
 private:
     static QVariantMap bilibiliHeaders();
+    static QString buildSearchCacheKey(const QString& keyword);
     static QString removeHtmlTags(const QString& html);
     static QString formatPlayCount(int count);
     bool emitSearchResultsFromJson(const QByteArray& data,
@@ -38,6 +39,7 @@ private:
     SearchCache m_searchCache;
     QString m_pendingSearchRequestId;
     QString m_pendingSearchKeyword;
+    QString m_pendingSearchCacheKey;
 };
 
 #endif // BILIBILISEARCHSERVICE_H

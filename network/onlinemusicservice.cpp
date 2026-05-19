@@ -1,15 +1,20 @@
 #include "onlinemusicservice.h"
 
+#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QMap>
 #include <QUrl>
 
 #include "networkclient.h"
 #include "onlinemusicsearch.h"
 
 namespace {
+constexpr int SearchPage = 1;
+constexpr int SearchPageSize = 30;
+
 void emitSearchFailure(OnlineMusicService* service, const ServiceError& error)
 {
     emit service->searchFailed(error);
@@ -45,6 +50,15 @@ void OnlineMusicService::search(const QString& keyword)
     searchSongsAsync(keyword);
 }
 
+QString OnlineMusicService::buildSearchCacheKey(const QString& keyword)
+{
+    QMap<QString, QString> parameters;
+    parameters.insert(QStringLiteral("page"), QString::number(SearchPage));
+    parameters.insert(QStringLiteral("pageSize"), QString::number(SearchPageSize));
+    parameters.insert(QStringLiteral("searchType"), QStringLiteral("song"));
+    return SearchCache::buildKey(QStringLiteral("netease"), keyword, parameters);
+}
+
 void OnlineMusicService::searchSongsAsync(const QString& keyword)
 {
     const QString trimmedKeyword = keyword.trimmed();
@@ -53,6 +67,15 @@ void OnlineMusicService::searchSongsAsync(const QString& keyword)
                                  QStringLiteral("请输入搜索关键词。"),
                                  false});
         return;
+    }
+
+    const QString cacheKey = buildSearchCacheKey(trimmedKeyword);
+    if (m_searchCache.hasValidCache(cacheKey)) {
+        const QString cachedJson = m_searchCache.getCache(cacheKey);
+        if (!cachedJson.isEmpty()
+            && emitSearchResultsFromJson(cachedJson.toUtf8())) {
+            return;
+        }
     }
 
     // 相同关键词优先复用本地缓存，避免重复网络请求。
@@ -65,8 +88,8 @@ void OnlineMusicService::searchSongsAsync(const QString& keyword)
     }
 
     const QString encodedKeyword = QString::fromLatin1(QUrl::toPercentEncoding(trimmedKeyword));
-    const QString apiUrl = QStringLiteral("https://music.163.com/api/search/get/web?s=%1&type=1&offset=0&limit=30")
-        .arg(encodedKeyword);
+    const QString apiUrl = QStringLiteral("https://music.163.com/api/search/get/web?s=%1&type=1&offset=0&limit=%2")
+        .arg(encodedKeyword, QString::number(SearchPageSize));
 
     QVariantMap headers;
     headers.insert("User-Agent",
@@ -78,6 +101,7 @@ void OnlineMusicService::searchSongsAsync(const QString& keyword)
     options.timeout = 15000;
     options.retry = 1;
     m_pendingSearchKeyword = trimmedKeyword;
+    m_pendingSearchCacheKey = cacheKey;
     m_pendingSearchRequestId = m_networkClient->get(QUrl(apiUrl), options);
 }
 
@@ -136,12 +160,21 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
     }
 
     const QString pendingKeyword = m_pendingSearchKeyword;
+    const QString pendingCacheKey = m_pendingSearchCacheKey;
     m_pendingSearchRequestId.clear();
     m_pendingSearchKeyword.clear();
+    m_pendingSearchCacheKey.clear();
 
-    const QString staleSearchJson = m_searchCache.getCache(pendingKeyword);
+    QString staleSearchJson = m_searchCache.getCache(pendingCacheKey);
+    if (staleSearchJson.isEmpty()) {
+        staleSearchJson = m_searchCache.getCache(pendingKeyword);
+    }
 
     if (!result.ok()) {
+        if (!staleSearchJson.isEmpty()) {
+            qWarning() << "Music search network failed, trying stale cache for"
+                       << pendingCacheKey;
+        }
         if (!staleSearchJson.isEmpty()
             && emitSearchResultsFromJson(staleSearchJson.toUtf8(),
                                          QStringLiteral("（缓存数据可能不是最新）"))) {
@@ -157,7 +190,7 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
     }
 
     if (emitSearchResultsFromJson(result.body)) {
-        m_searchCache.saveCache(pendingKeyword, QString::fromUtf8(result.body));
+        m_searchCache.saveCache(pendingCacheKey, QString::fromUtf8(result.body));
     }
 }
 

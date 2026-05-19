@@ -55,6 +55,7 @@ private slots:
     void onRequestFinished(const QString& requestId, const NetworkResult& result);
 
 private:
+    static QString buildSearchCacheKey(const QString& keyword);
     bool emitSearchResultsFromJson(const QByteArray& data,
                                    const QString& statusSuffix = QString());
     QList<SongInfo> parseSearchResults(const QByteArray& data,
@@ -69,6 +70,7 @@ private:
     SearchCache m_searchCache;
     QString m_pendingSearchRequestId;
     QString m_pendingSearchKeyword;
+    QString m_pendingSearchCacheKey;
     QHash<QString, QString> m_pendingResolveRequestIds;
 };
 

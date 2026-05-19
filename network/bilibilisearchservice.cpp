@@ -4,11 +4,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QDebug>
+#include <QMap>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
 
 namespace {
+constexpr int SearchPage = 1;
+constexpr int SearchPageSize = 20;
+
 QString bilibiliUserAgent()
 {
     return QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -39,6 +44,15 @@ QVariantMap BilibiliSearchService::bilibiliHeaders()
     return headers;
 }
 
+QString BilibiliSearchService::buildSearchCacheKey(const QString& keyword)
+{
+    QMap<QString, QString> parameters;
+    parameters.insert(QStringLiteral("page"), QString::number(SearchPage));
+    parameters.insert(QStringLiteral("pageSize"), QString::number(SearchPageSize));
+    parameters.insert(QStringLiteral("searchType"), QStringLiteral("video"));
+    return SearchCache::buildKey(QStringLiteral("bilibili"), keyword, parameters);
+}
+
 void BilibiliSearchService::searchVideo(const QString& keyword)
 {
     const QString trimmedKeyword = keyword.trimmed();
@@ -50,6 +64,15 @@ void BilibiliSearchService::searchVideo(const QString& keyword)
     }
 
     emit searchStarted(trimmedKeyword);
+
+    const QString cacheKey = buildSearchCacheKey(trimmedKeyword);
+    if (m_searchCache.hasValidCache(cacheKey)) {
+        const QString cachedJson = m_searchCache.getCache(cacheKey);
+        if (!cachedJson.isEmpty()
+            && emitSearchResultsFromJson(cachedJson.toUtf8())) {
+            return;
+        }
+    }
 
     // 相同关键词优先复用本地缓存，缓存命中时不再发起网络请求。
     if (m_searchCache.hasValidCache(trimmedKeyword)) {
@@ -64,7 +87,7 @@ void BilibiliSearchService::searchVideo(const QString& keyword)
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("search_type"), QStringLiteral("video"));
     query.addQueryItem(QStringLiteral("keyword"), trimmedKeyword);
-    query.addQueryItem(QStringLiteral("page"), QStringLiteral("1"));
+    query.addQueryItem(QStringLiteral("page"), QString::number(SearchPage));
     url.setQuery(query);
 
     RequestOptions options;
@@ -72,6 +95,7 @@ void BilibiliSearchService::searchVideo(const QString& keyword)
     options.timeout = 30000;
     options.retry = 2;
     m_pendingSearchKeyword = trimmedKeyword;
+    m_pendingSearchCacheKey = cacheKey;
     m_pendingSearchRequestId = m_networkClient->get(url, options);
 }
 
@@ -82,11 +106,20 @@ void BilibiliSearchService::onRequestFinished(const QString& requestId, const Ne
     }
 
     const QString pendingKeyword = m_pendingSearchKeyword;
+    const QString pendingCacheKey = m_pendingSearchCacheKey;
     m_pendingSearchRequestId.clear();
     m_pendingSearchKeyword.clear();
-    const QString staleSearchJson = m_searchCache.getCache(pendingKeyword);
+    m_pendingSearchCacheKey.clear();
+    QString staleSearchJson = m_searchCache.getCache(pendingCacheKey);
+    if (staleSearchJson.isEmpty()) {
+        staleSearchJson = m_searchCache.getCache(pendingKeyword);
+    }
 
     if (!result.ok()) {
+        if (!staleSearchJson.isEmpty()) {
+            qWarning() << "Bilibili search network failed, trying stale cache for"
+                       << pendingCacheKey;
+        }
         if (!staleSearchJson.isEmpty()
             && emitSearchResultsFromJson(staleSearchJson.toUtf8(),
                                          QStringLiteral("（缓存数据可能不是最新）"))) {
@@ -102,7 +135,7 @@ void BilibiliSearchService::onRequestFinished(const QString& requestId, const Ne
     }
 
     if (emitSearchResultsFromJson(result.body)) {
-        m_searchCache.saveCache(pendingKeyword, QString::fromUtf8(result.body));
+        m_searchCache.saveCache(pendingCacheKey, QString::fromUtf8(result.body));
     }
 }
 
