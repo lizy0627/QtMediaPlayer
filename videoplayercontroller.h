@@ -35,7 +35,7 @@ public:
                                    UserSession* userSession,
                                    QObject* parent = nullptr);
 
-    void open(const QString& filePath, bool localFile = true);
+    bool open(const QString& filePath, bool localFile = true);
     void openAtPosition(const QString& filePath, qint64 position);
     void togglePlayback();
     void jump(bool forward, int ms = 5000);

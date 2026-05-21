@@ -3,6 +3,7 @@
 #include "audioplayer.h"
 #include "mediaplaybackrouter.h"
 #include "mediahistory.h"
+#include "mediaprobeservice.h"
 #include "videoplayer.h"
 
 #include <QDir>
@@ -53,14 +54,18 @@ void MainWindowController::showAudioPage()
 
 void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
 {
+    const QString videoPattern = QStringLiteral("*.") + videoExtensions().join(QStringLiteral(" *."));
+    const QString audioPattern = QStringLiteral("*.") + audioExtensions().join(QStringLiteral(" *."));
+
     QFileDialog fileDialog(dialogParent);
     fileDialog.setDirectory(QDir::homePath());
     fileDialog.setFileMode(QFileDialog::ExistingFiles);
-    fileDialog.setNameFilter(QStringLiteral(
-        "媒体文件 (*.mp4 *.avi *.mkv *.mov *.flv *.wmv *.webm *.m4v *.mpg *.mpeg *.3gp *.ts *.mp3 *.wav *.flac *.ogg *.m4a *.aac);;"
-        "视频文件 (*.mp4 *.avi *.mkv *.mov *.flv *.wmv *.webm *.m4v *.mpg *.mpeg *.3gp *.ts);;"
-        "音频文件 (*.mp3 *.wav *.flac *.ogg *.m4a *.aac);;"
-        "所有文件 (*.*)"));
+    fileDialog.setNameFilter(
+        QStringLiteral("\u5a92\u4f53\u6587\u4ef6 (%1 %2);;"
+                       "\u89c6\u9891\u6587\u4ef6 (%1);;"
+                       "\u97f3\u9891\u6587\u4ef6 (%2);;"
+                       "\u6240\u6709\u6587\u4ef6 (*.*)")
+            .arg(videoPattern, audioPattern));
 
     if (!fileDialog.exec()) {
         return;
@@ -77,6 +82,13 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
 
     for (const QString& filePath : selectedFiles) {
         const QFileInfo fileInfo(filePath);
+        const ProbeResult probeResult = MediaProbeService::probeLocalFile(filePath);
+        if (probeResult.status != ProbeStatus::Supported) {
+            const QString displayName = fileInfo.fileName().isEmpty() ? filePath : fileInfo.fileName();
+            unsupportedFiles.append(QStringLiteral("%1: %2").arg(displayName, probeResult.reason));
+            continue;
+        }
+
         switch (routeForFile(filePath)) {
         case MediaRoute::Video:
             videoFiles.append(filePath);
@@ -108,11 +120,14 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
     if (!unsupportedFiles.isEmpty()) {
         QMessageBox::warning(
             dialogParent,
-            QStringLiteral("格式过滤提示"),
-            QStringLiteral("以下文件格式暂不支持，已自动过滤：\n\n%1\n\n支持的视频格式：\n%2\n\n支持的音频格式：\n%3")
+            QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
+            QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u4ee5\u4e0b\u6587\u4ef6\uff0c\u5df2\u963b\u6b62\u64ad\u653e\uff1a\n\n%1\n\n"
+                           "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
+                           "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
                 .arg(unsupportedFiles.join(QStringLiteral("\n")),
-                     videoExtensions().join(QStringLiteral(", ")),
-                     audioExtensions().join(QStringLiteral(", "))));
+                     audioExtensions().join(QStringLiteral(", ")),
+                     videoExtensions().join(QStringLiteral(", "))));
+        return;
     } else if (videoFiles.isEmpty() && audioFiles.isEmpty()) {
         QMessageBox::warning(dialogParent,
                              QStringLiteral("提示"),
@@ -172,30 +187,11 @@ MainWindowController::MediaRoute MainWindowController::routeForFile(const QStrin
 
 QStringList MainWindowController::videoExtensions() const
 {
-    return {
-        QStringLiteral("mp4"),
-        QStringLiteral("avi"),
-        QStringLiteral("mkv"),
-        QStringLiteral("mov"),
-        QStringLiteral("flv"),
-        QStringLiteral("wmv"),
-        QStringLiteral("webm"),
-        QStringLiteral("m4v"),
-        QStringLiteral("mpg"),
-        QStringLiteral("mpeg"),
-        QStringLiteral("3gp"),
-        QStringLiteral("ts")
-    };
+    return MediaProbeService::supportedVideoFormats();
 }
 
 QStringList MainWindowController::audioExtensions() const
 {
-    return {
-        QStringLiteral("mp3"),
-        QStringLiteral("wav"),
-        QStringLiteral("flac"),
-        QStringLiteral("ogg"),
-        QStringLiteral("m4a"),
-        QStringLiteral("aac")
-    };
+    return MediaProbeService::supportedAudioFormats();
 }
+

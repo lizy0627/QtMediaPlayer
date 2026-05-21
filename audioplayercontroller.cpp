@@ -11,6 +11,7 @@
 #include "audiotrack.h"
 #include "lyricservice.h"
 #include "mediahistory.h"
+#include "mediaprobeservice.h"
 #include "network/onlinemusicservice.h"
 
 namespace {
@@ -51,6 +52,23 @@ QString playbackErrorMessage(QMediaPlayer::Error error, const QString& errorStri
     }
     return message;
 }
+
+QString mediaProbeWarningMessage(const QStringList& failedFiles)
+{
+    const QString reasonText = failedFiles.join(QStringLiteral("\n"));
+    return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
+                          "\u5177\u4f53\u539f\u56e0\uff1a\n%1\n\n"
+                          "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
+                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
+        .arg(reasonText,
+             MediaProbeService::supportedAudioFormats().join(QStringLiteral(", ")),
+             MediaProbeService::supportedVideoFormats().join(QStringLiteral(", ")));
+}
+
+QString mediaProbeWarningMessage(const ProbeResult& result)
+{
+    return mediaProbeWarningMessage(QStringList{result.reason});
+}
 }
 
 AudioPlayerController::AudioPlayerController(PlaylistModel* playlistModel,
@@ -83,18 +101,29 @@ void AudioPlayerController::addLocalFiles(const QStringList& files)
 {
     const bool wasPlaying = m_playbackController->isPlaying();
     const int firstAddedIndex = m_playlistModel->count();
+    QStringList rejectedFiles;
 
     for (const QString& file : files) {
-        const QFileInfo fileInfo(file);
-        if (!fileInfo.exists()) {
+        const ProbeResult probeResult = MediaProbeService::probeLocalFile(file);
+        if (probeResult.status != ProbeStatus::Supported) {
+            const QFileInfo fileInfo(file);
+            const QString displayName = fileInfo.fileName().isEmpty() ? file : fileInfo.fileName();
+            rejectedFiles.append(QStringLiteral("%1: %2").arg(displayName, probeResult.reason));
             continue;
         }
+
+        const QFileInfo fileInfo(file);
 
         AudioTrack track;
         track.url = QUrl::fromLocalFile(file);
         track.title = fileInfo.fileName();
         track.isLocal = true;
         m_playlistModel->add(track);
+    }
+
+    if (!rejectedFiles.isEmpty()) {
+        emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
+                              mediaProbeWarningMessage(rejectedFiles));
     }
 
     if (m_playlistModel->count() == firstAddedIndex) {
@@ -174,12 +203,13 @@ bool AudioPlayerController::playHistoryRecord(const MediaHistoryRecord& record)
         track.playbackStatus = AudioTrackPlaybackStatus::PendingValidation;
         track.statusMessage = QStringLiteral("从历史记录恢复，开始播放时会重新验证在线音频。");
     } else {
-        const QFileInfo fileInfo(historyPath);
-        if (!fileInfo.exists()) {
-            emit warningRequested(QStringLiteral("提示"),
-                                  QStringLiteral("音频文件不存在或已被删除：\n\n%1").arg(historyPath));
+        const ProbeResult probeResult = MediaProbeService::probeLocalFile(historyPath);
+        if (probeResult.status != ProbeStatus::Supported) {
+            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
+                                  mediaProbeWarningMessage(probeResult));
             return false;
         }
+        const QFileInfo fileInfo(historyPath);
         track.url = QUrl::fromLocalFile(historyPath);
         track.title = record.fileName.trimmed().isEmpty() ? fileInfo.fileName() : record.fileName.trimmed();
         track.isLocal = true;
@@ -251,6 +281,16 @@ void AudioPlayerController::play()
     if (currentTrackNeedsOnlineResolve(track)) {
         resolveCurrentOnlineTrack();
         return;
+    }
+
+    if (track.isLocal) {
+        const ProbeResult probeResult = MediaProbeService::probeLocalFile(track.url.toLocalFile());
+        if (probeResult.status != ProbeStatus::Supported) {
+            markCurrentTrackFailed(probeResult.reason);
+            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
+                                  mediaProbeWarningMessage(probeResult));
+            return;
+        }
     }
 
     QMediaPlayer* player = m_playbackController->player();

@@ -4,6 +4,7 @@
 #include <QUrl>
 
 #include "mediahistory.h"
+#include "mediaprobeservice.h"
 #include "onlinevideocoordinator.h"
 #include "onlinevideoservice.h"
 #include "videocapturecoordinator.h"
@@ -17,6 +18,17 @@ constexpr qint64 kResumeNearEndThresholdMs = 5000;
 bool isReadyForDeferredSeek(QMediaPlayer::MediaStatus status)
 {
     return status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia;
+}
+
+QString mediaProbeWarningMessage(const ProbeResult& result)
+{
+    return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
+                          "\u5177\u4f53\u539f\u56e0\uff1a\n%1\n\n"
+                          "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
+                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
+        .arg(result.reason,
+             result.supportedAudioFormats.join(QStringLiteral(", ")),
+             result.supportedVideoFormats.join(QStringLiteral(", ")));
 }
 }
 
@@ -125,10 +137,19 @@ VideoPlayerController::VideoPlayerController(QWidget* viewParent,
 
 }
 
-void VideoPlayerController::open(const QString& filePath, bool localFile)
+bool VideoPlayerController::open(const QString& filePath, bool localFile)
 {
     if (!m_playbackController || filePath.isEmpty()) {
-        return;
+        return false;
+    }
+
+    if (localFile) {
+        const ProbeResult probeResult = MediaProbeService::probeLocalFile(filePath);
+        if (probeResult.status != ProbeStatus::Supported) {
+            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
+                                  mediaProbeWarningMessage(probeResult));
+            return false;
+        }
     }
 
     clearPendingSeek();
@@ -158,6 +179,7 @@ void VideoPlayerController::open(const QString& filePath, bool localFile)
     }
 
     m_playbackController->play();
+    return true;
 }
 
 void VideoPlayerController::openAtPosition(const QString& filePath, qint64 position)
@@ -167,7 +189,9 @@ void VideoPlayerController::openAtPosition(const QString& filePath, qint64 posit
     }
 
     m_skipNextRestorePrompt = true;
-    open(filePath, true);
+    if (!open(filePath, true)) {
+        return;
+    }
     if (position > 0) {
         schedulePendingSeek(position, PendingSeekMode::Resume);
     }
