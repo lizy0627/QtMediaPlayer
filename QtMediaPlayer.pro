@@ -62,6 +62,7 @@ SOURCES += \
     lyricwidget.cpp \
     lyricpanel.cpp \
     mediahistory.cpp \
+    mediafileprobe.cpp \
     mainwindowcontroller.cpp \
     migrationrunner.cpp \
     network/lyricdownloadservice.cpp \
@@ -133,6 +134,7 @@ HEADERS += \
     lyricservice.h \
     lyricwidget.h \
     mediaprobeservice.h \
+    mediafileprobe.h \
     mediaplaybackrouter.h \
     mediahistory.h \
     mainwindowcontroller.h \

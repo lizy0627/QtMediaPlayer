@@ -1,9 +1,9 @@
 #include "mainwindowcontroller.h"
 
 #include "audioplayer.h"
+#include "mediafileprobe.h"
 #include "mediaplaybackrouter.h"
 #include "mediahistory.h"
-#include "mediaprobeservice.h"
 #include "videoplayer.h"
 
 #include <QDir>
@@ -79,17 +79,20 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
     QStringList videoFiles;
     QStringList audioFiles;
     QStringList unsupportedFiles;
+    int unsupportedIndex = 1;
 
     for (const QString& filePath : selectedFiles) {
         const QFileInfo fileInfo(filePath);
-        const ProbeResult probeResult = MediaProbeService::probeLocalFile(filePath);
-        if (probeResult.status != ProbeStatus::Supported) {
+        const MediaProbeResult probeResult = MediaFileProbe::probe(filePath);
+        if (!probeResult.supported) {
             const QString displayName = fileInfo.fileName().isEmpty() ? filePath : fileInfo.fileName();
-            unsupportedFiles.append(QStringLiteral("%1: %2").arg(displayName, probeResult.reason));
+            unsupportedFiles.append(QStringLiteral("%1. %2：%3")
+                                        .arg(unsupportedIndex++)
+                                        .arg(displayName, probeResult.reason));
             continue;
         }
 
-        switch (routeForFile(filePath)) {
+        switch (probeResult.route) {
         case MediaRoute::Video:
             videoFiles.append(filePath);
             break;
@@ -97,8 +100,11 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
             audioFiles.append(filePath);
             break;
         case MediaRoute::Unsupported:
-            unsupportedFiles.append(QStringLiteral("%1 (.%2)")
-                                        .arg(fileInfo.fileName(), fileInfo.suffix().toLower()));
+            unsupportedFiles.append(QStringLiteral("%1. %2：%3")
+                                        .arg(unsupportedIndex++)
+                                        .arg(fileInfo.fileName(),
+                                             QStringLiteral("\u5f53\u524d\u6587\u4ef6\u6269\u5c55\u540d\u4e0d\u5728\u652f\u6301\u5217\u8868\u4e2d\uff1a%1")
+                                                 .arg(fileInfo.suffix().toLower())));
             break;
         }
     }
@@ -117,21 +123,17 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
         }
     }
 
-    if (!unsupportedFiles.isEmpty()) {
-        QMessageBox::warning(
-            dialogParent,
-            QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
-            QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u4ee5\u4e0b\u6587\u4ef6\uff0c\u5df2\u963b\u6b62\u64ad\u653e\uff1a\n\n%1\n\n"
-                           "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
-                           "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
-                .arg(unsupportedFiles.join(QStringLiteral("\n")),
-                     audioExtensions().join(QStringLiteral(", ")),
-                     videoExtensions().join(QStringLiteral(", "))));
-        return;
-    } else if (videoFiles.isEmpty() && audioFiles.isEmpty()) {
+    if (videoFiles.isEmpty() && audioFiles.isEmpty() && unsupportedFiles.isEmpty()) {
         QMessageBox::warning(dialogParent,
-                             QStringLiteral("提示"),
-                             QStringLiteral("未选择任何有效的媒体文件！"));
+                             QStringLiteral("\u63d0\u793a"),
+                             QStringLiteral("\u672a\u9009\u62e9\u4efb\u4f55\u6709\u6548\u7684\u5a92\u4f53\u6587\u4ef6\uff01"));
+    }
+
+    if (!unsupportedFiles.isEmpty()) {
+        QMessageBox::warning(dialogParent,
+                             QStringLiteral("\u4ee5\u4e0b\u6587\u4ef6\u65e0\u6cd5\u64ad\u653e"),
+                             QStringLiteral("\u4ee5\u4e0b\u6587\u4ef6\u65e0\u6cd5\u64ad\u653e\uff1a\n%1")
+                                 .arg(unsupportedFiles.join(QStringLiteral("\n"))));
     }
 }
 
@@ -173,25 +175,13 @@ void MainWindowController::playFromHistory(const MediaHistoryRecord& record)
                              : m_playbackRouter->lastError());
 }
 
-MainWindowController::MediaRoute MainWindowController::routeForFile(const QString& filePath) const
-{
-    const QString suffix = QFileInfo(filePath).suffix().toLower();
-    if (videoExtensions().contains(suffix)) {
-        return MediaRoute::Video;
-    }
-    if (audioExtensions().contains(suffix)) {
-        return MediaRoute::Audio;
-    }
-    return MediaRoute::Unsupported;
-}
-
 QStringList MainWindowController::videoExtensions() const
 {
-    return MediaProbeService::supportedVideoFormats();
+    return MediaFileProbe::supportedVideoFormats();
 }
 
 QStringList MainWindowController::audioExtensions() const
 {
-    return MediaProbeService::supportedAudioFormats();
+    return MediaFileProbe::supportedAudioFormats();
 }
 

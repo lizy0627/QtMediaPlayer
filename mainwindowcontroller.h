@@ -34,14 +34,6 @@ public:
     void playVideoFromHistory(const QString& filePath, qint64 position);
 
 private:
-    enum class MediaRoute
-    {
-        Audio,
-        Video,
-        Unsupported
-    };
-
-    MediaRoute routeForFile(const QString& filePath) const;
     QStringList videoExtensions() const;
     QStringList audioExtensions() const;
 
