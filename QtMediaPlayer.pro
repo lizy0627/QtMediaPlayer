@@ -1,6 +1,12 @@
-QT += core gui multimedia multimediawidgets network sql concurrent
+lessThan(QT_MAJOR_VERSION, 6) {
+    error("QtMediaPlayer requires Qt 6.x. Please run qmake from a Qt 6 kit.")
+}
 
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+greaterThan(QT_MAJOR_VERSION, 6) {
+    error("QtMediaPlayer is currently Qt 6.x-only. Please run qmake from a Qt 6 kit.")
+}
+
+QT += core gui widgets multimedia multimediawidgets network sql concurrent
 
 CONFIG += c++17
 

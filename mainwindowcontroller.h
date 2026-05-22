@@ -32,6 +32,7 @@ public:
                                   AudioPlayer* audioPlayer,
                                   MediaHistoryService* historyService,
                                   QObject* parent = nullptr);
+    ~MainWindowController() override;
 
     void showVideoPage();
     void showAudioPage();
@@ -44,6 +45,7 @@ private:
     QStringList videoExtensions() const;
     QStringList audioExtensions() const;
     void handleLocalMediaProbeFinished();
+    void closeProbeProgressDialog(bool deleteImmediately = false);
 
     QStackedWidget* m_pages = nullptr;
     QWidget* m_videoPage = nullptr;

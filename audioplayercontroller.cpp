@@ -97,16 +97,34 @@ QString playbackErrorMessage(QMediaPlayer::Error error, const QString& errorStri
     return message;
 }
 
+QString localPlaybackFailureHint()
+{
+    return QStringLiteral("\n\n提示：本地文件选择阶段只做快速过滤；扩展名支持不代表编码一定可播放。"
+                          "如果播放失败，可能是文件损坏、编码不受支持，或系统缺少对应解码器。");
+}
+
+QString localPlaybackErrorMessage(QMediaPlayer::Error error, const QString& errorString)
+{
+    return playbackErrorMessage(error, errorString) + localPlaybackFailureHint();
+}
+
+QString quickProbeNotice()
+{
+    return QStringLiteral("\n\n说明：本地文件选择阶段仅检查文件是否存在、可读、非空以及扩展名是否在支持列表中；"
+                          "扩展名支持不代表编码一定可播放。");
+}
+
 QString mediaProbeWarningMessage(const QStringList& failedFiles)
 {
     const QString reasonText = failedFiles.join(QStringLiteral("\n"));
     return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
                           "\u5177\u4f53\u539f\u56e0\uff1a\n%1\n\n"
                           "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
-                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
+                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3%4")
         .arg(reasonText,
              MediaProbeService::supportedAudioFormats().join(QStringLiteral(", ")),
-             MediaProbeService::supportedVideoFormats().join(QStringLiteral(", ")));
+             MediaProbeService::supportedVideoFormats().join(QStringLiteral(", ")),
+             quickProbeNotice());
 }
 
 QString mediaProbeWarningMessage(const ProbeResult& result)
@@ -467,7 +485,8 @@ void AudioPlayerController::handleMediaStatusChanged(int status)
             && !m_playlistModel->currentTrack().isLocal;
         const QString message = isOnlineTrack
             ? invalidOnlineAudioUrlMessage(QStringLiteral("\u64ad\u653e\u5668\u62a5\u544a\u5a92\u4f53\u65e0\u6548\uff0c\u8be5\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002"))
-            : QStringLiteral("\u5a92\u4f53\u65e0\u6548\uff1a\u65e0\u6cd5\u52a0\u8f7d\u6216\u64ad\u653e\u5f53\u524d\u97f3\u9891\u3002");
+            : QStringLiteral("\u5a92\u4f53\u65e0\u6548\uff1a\u65e0\u6cd5\u52a0\u8f7d\u6216\u64ad\u653e\u5f53\u524d\u97f3\u9891\u3002")
+                  + localPlaybackFailureHint();
         markCurrentTrackFailed(message);
         emit warningRequested(isOnlineTrack
                                   ? QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548")
@@ -492,8 +511,9 @@ void AudioPlayerController::handlePlayerError(int error, const QString& errorStr
         return;
     }
 
-    QString message = playbackErrorMessage(mediaError, errorString);
-    if (m_playlistModel && m_playlistModel->hasCurrent() && !m_playlistModel->currentTrack().isLocal) {
+    const bool hasCurrentTrack = m_playlistModel && m_playlistModel->hasCurrent();
+    if (hasCurrentTrack && !m_playlistModel->currentTrack().isLocal) {
+        QString message;
         message = QStringLiteral("%1\uff1a\u5728\u7ebf\u97f3\u9891\u64ad\u653e\u5730\u5740\u4e0d\u53ef\u7528\uff0c\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u3001\u4e0d\u53ef\u8bbf\u95ee\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002")
                       .arg(playbackErrorCategory(mediaError));
         if (!errorString.trimmed().isEmpty()) {
@@ -503,6 +523,10 @@ void AudioPlayerController::handlePlayerError(int error, const QString& errorStr
         emit warningRequested(playbackErrorCategory(mediaError), message);
         return;
     }
+
+    const QString message = hasCurrentTrack && m_playlistModel->currentTrack().isLocal
+        ? localPlaybackErrorMessage(mediaError, errorString)
+        : playbackErrorMessage(mediaError, errorString);
     markCurrentTrackFailed(message);
     emit warningRequested(playbackErrorCategory(mediaError), message);
 }

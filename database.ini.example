@@ -9,8 +9,8 @@ driver=QMYSQL
 host=127.0.0.1
 port=3306
 name=qtmediaplayer
-user=root
-password=123456
+user=qtmediaplayer_user
+password=change-this-password
 createDatabase=true
 connectOptions=MYSQL_OPT_RECONNECT=1
 

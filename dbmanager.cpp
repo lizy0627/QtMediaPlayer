@@ -229,6 +229,23 @@ bool DatabaseManager::openDatabase(const DatabaseConfig& config)
         return false;
     }
 
+    if (isMysqlDriver(effectiveConfig.driverName)) {
+        QStringList missingCredentials;
+        if (effectiveConfig.userName.trimmed().isEmpty()) {
+            missingCredentials.append(QStringLiteral("user"));
+        }
+        if (effectiveConfig.password.isEmpty()) {
+            missingCredentials.append(QStringLiteral("password"));
+        }
+        if (!missingCredentials.isEmpty()) {
+            setLastError(QStringLiteral("QMYSQL selected but missing required credential(s): %1. "
+                                        "Set them in database.ini or with "
+                                        "QTMEDIAPLAYER_DB_USER/QTMEDIAPLAYER_DB_PASSWORD.")
+                             .arg(missingCredentials.join(QStringLiteral(", "))));
+            return false;
+        }
+    }
+
     if (!QSqlDatabase::isDriverAvailable(effectiveConfig.driverName)) {
         setLastError(QStringLiteral("%1 driver is not available. Available drivers: %2")
                          .arg(effectiveConfig.driverName, availableDriversText()));

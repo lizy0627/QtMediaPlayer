@@ -24,8 +24,6 @@ DatabaseConfig mysqlDefaults()
     config.hostName = QStringLiteral("127.0.0.1");
     config.port = 3306;
     config.databaseName = QStringLiteral("qtmediaplayer");
-    config.userName = QStringLiteral("root");
-    config.password = QStringLiteral("123456");
     config.connectOptions = QStringLiteral("MYSQL_OPT_RECONNECT=1");
     config.createDatabase = true;
     return config;
@@ -49,15 +47,6 @@ QString sanitizedConnectOptions(const QString& connectOptions)
         }
     }
     return options.join(QStringLiteral(";"));
-}
-
-void applyDefaultRootPassword(DatabaseConfig& config)
-{
-    if (config.driverName == QStringLiteral("QMYSQL")
-        && config.userName == QStringLiteral("root")
-        && config.password.isEmpty()) {
-        config.password = QStringLiteral("123456");
-    }
 }
 
 bool hasMysqlEnvironmentOverrides()
@@ -228,7 +217,6 @@ DatabaseConfig DatabaseConfigLoader::load()
     if (config.driverName == QStringLiteral("QSQLITE") && config.databaseName.trimmed().isEmpty()) {
         config.databaseName = defaultSqliteDatabasePath();
     }
-    applyDefaultRootPassword(config);
     config.connectOptions = sanitizedConnectOptions(config.connectOptions);
     return config;
 }

@@ -90,7 +90,13 @@ QString playerErrorTitle(QMediaPlayer::Error error)
     }
 }
 
-QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString)
+QString localPlaybackFailureHint()
+{
+    return QStringLiteral("\n\n提示：本地文件选择阶段只做快速过滤；扩展名支持不代表编码一定可播放。"
+                          "如果播放失败，可能是文件损坏、编码不受支持，或系统缺少对应解码器。");
+}
+
+QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString, bool localFile)
 {
     QString message;
     switch (error) {
@@ -116,7 +122,16 @@ QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString
     if (!errorString.trimmed().isEmpty()) {
         message += QLatin1Char('\n') + errorString.trimmed();
     }
+    if (localFile) {
+        message += localPlaybackFailureHint();
+    }
     return message;
+}
+
+QString quickProbeNotice()
+{
+    return QStringLiteral("\n\n说明：本地文件选择阶段仅检查文件是否存在、可读、非空以及扩展名是否在支持列表中；"
+                          "扩展名支持不代表编码一定可播放。");
 }
 
 QString mediaProbeWarningMessage(const ProbeResult& result)
@@ -124,10 +139,11 @@ QString mediaProbeWarningMessage(const ProbeResult& result)
     return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
                           "\u5177\u4f53\u539f\u56e0\uff1a\n%1\n\n"
                           "\u652f\u6301\u7684\u97f3\u9891\u683c\u5f0f\uff1a\n%2\n\n"
-                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3")
+                          "\u652f\u6301\u7684\u89c6\u9891\u683c\u5f0f\uff1a\n%3%4")
         .arg(result.reason,
              result.supportedAudioFormats.join(QStringLiteral(", ")),
-             result.supportedVideoFormats.join(QStringLiteral(", ")));
+             result.supportedVideoFormats.join(QStringLiteral(", ")),
+             quickProbeNotice());
 }
 }
 
@@ -567,8 +583,15 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
         if (m_playbackController) {
             m_playbackController->stop();
         }
-        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
-                              QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u6587\u4ef6\u4e0d\u53ef\u7528\uff0c\u6216\u5728\u7ebf\u64ad\u653e\u5730\u5740\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u3001\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002"));
+        const bool localFile = !m_currentVideoPath.trimmed().isEmpty();
+        QString message = localFile
+            ? QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u6587\u4ef6\u4e0d\u53ef\u7528\u3002")
+                  + localPlaybackFailureHint()
+            : QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u5728\u7ebf\u64ad\u653e\u5730\u5740\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002");
+        emit warningRequested(localFile
+                                  ? QStringLiteral("\u683c\u5f0f\u9519\u8bef")
+                                  : QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              message);
         return;
     }
 }
@@ -582,7 +605,8 @@ void VideoPlayerController::onPlayerError(QMediaPlayer::Error error, const QStri
     if (m_playbackController) {
         m_playbackController->stop();
     }
-    emit warningRequested(playerErrorTitle(error), playerErrorMessage(error, errorString));
+    emit warningRequested(playerErrorTitle(error),
+                          playerErrorMessage(error, errorString, !m_currentVideoPath.trimmed().isEmpty()));
 }
 
 void VideoPlayerController::saveCurrentProgress()

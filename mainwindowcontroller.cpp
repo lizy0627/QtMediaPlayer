@@ -40,6 +40,20 @@ MainWindowController::MainWindowController(QStackedWidget* pages,
             &MainWindowController::handleLocalMediaProbeFinished);
 }
 
+MainWindowController::~MainWindowController()
+{
+    if (m_probeWatcher) {
+        disconnect(m_probeWatcher, nullptr, this, nullptr);
+        if (m_probeWatcher->isRunning()) {
+            m_probeWatcher->cancel();
+        }
+    }
+
+    closeProbeProgressDialog(true);
+    m_probeDialogParent.clear();
+    m_probeRunning = false;
+}
+
 void MainWindowController::showVideoPage()
 {
     if (m_pages && m_videoPage) {
@@ -116,11 +130,7 @@ void MainWindowController::handleLocalMediaProbeFinished()
     const QList<ProbedMediaFile> probedFiles = m_probeWatcher->result();
     m_probeRunning = false;
 
-    if (m_probeProgressDialog) {
-        m_probeProgressDialog->close();
-        m_probeProgressDialog->deleteLater();
-        m_probeProgressDialog.clear();
-    }
+    closeProbeProgressDialog();
 
     QWidget* dialogParent = m_probeDialogParent.data();
     m_probeDialogParent.clear();
@@ -200,8 +210,28 @@ void MainWindowController::handleLocalMediaProbeFinished()
     if (!unsupportedFiles.isEmpty()) {
         QMessageBox::warning(dialogParent,
                              QStringLiteral("\u4ee5\u4e0b\u6587\u4ef6\u65e0\u6cd5\u64ad\u653e"),
-                             QStringLiteral("\u4ee5\u4e0b\u6587\u4ef6\u65e0\u6cd5\u64ad\u653e\uff1a\n%1")
+                             QStringLiteral("\u4ee5\u4e0b\u6587\u4ef6\u65e0\u6cd5\u64ad\u653e\uff1a\n%1\n\n"
+                                            "\u8bf4\u660e\uff1a\u672c\u5730\u6587\u4ef6\u9009\u62e9\u9636\u6bb5\u4ec5\u505a\u5feb\u901f\u8fc7\u6ee4\uff1b"
+                                            "\u6269\u5c55\u540d\u652f\u6301\u4e0d\u4ee3\u8868\u7f16\u7801\u4e00\u5b9a\u53ef\u64ad\u653e\u3002")
                                  .arg(unsupportedFiles.join(QStringLiteral("\n"))));
+    }
+}
+
+void MainWindowController::closeProbeProgressDialog(bool deleteImmediately)
+{
+    QProgressDialog* progressDialog = m_probeProgressDialog.data();
+    if (!progressDialog) {
+        m_probeProgressDialog.clear();
+        return;
+    }
+
+    progressDialog->close();
+    m_probeProgressDialog.clear();
+
+    if (deleteImmediately) {
+        delete progressDialog;
+    } else {
+        progressDialog->deleteLater();
     }
 }
 
