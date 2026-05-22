@@ -15,6 +15,11 @@ QDateTime parseStoredDateTime(const QString& value)
     }
     return dateTime;
 }
+
+QString sqliteIdentifier(QString identifier)
+{
+    return QStringLiteral("\"%1\"").arg(identifier.replace(QStringLiteral("\""), QStringLiteral("\"\"")));
+}
 }
 
 MigrationRunner::MigrationRunner(const QSqlDatabase& database)
@@ -33,8 +38,8 @@ bool MigrationRunner::runMigrations(int targetVersion)
         setLastError(QStringLiteral("database is not open"));
         return false;
     }
-    if (!isMysql()) {
-        setLastError(QStringLiteral("database driver is not MySQL-compatible: %1").arg(m_db.driverName()));
+    if (!isMysql() && !isSqlite()) {
+        setLastError(QStringLiteral("unsupported database driver for migrations: %1").arg(m_db.driverName()));
         return false;
     }
 
@@ -124,16 +129,17 @@ bool MigrationRunner::migrateToVersion1()
 {
     return execStatement(QStringLiteral(
                "CREATE TABLE IF NOT EXISTS users ("
-               "id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY, "
+               "id %1, "
                "username VARCHAR(191) UNIQUE NOT NULL, "
                "password VARCHAR(128) NOT NULL, "
                "email VARCHAR(255), "
                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
                "last_login VARCHAR(32), "
-               "login_count INTEGER DEFAULT 0)"))
+               "login_count INTEGER DEFAULT 0)")
+               .arg(autoIncrementPrimaryKey()))
         && execStatement(QStringLiteral(
                "CREATE TABLE IF NOT EXISTS danmaku ("
-               "id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY, "
+               "id %1, "
                "media_id VARCHAR(128) NOT NULL DEFAULT '', "
                "video_path VARCHAR(768) NOT NULL, "
                "username VARCHAR(191) NOT NULL, "
@@ -142,10 +148,11 @@ bool MigrationRunner::migrateToVersion1()
                "color VARCHAR(32) DEFAULT '#FFFFFF', "
                "font_size INTEGER DEFAULT 25, "
                "type INTEGER DEFAULT 0, "
-               "create_time DATETIME DEFAULT CURRENT_TIMESTAMP)"))
+               "create_time DATETIME DEFAULT CURRENT_TIMESTAMP)")
+               .arg(autoIncrementPrimaryKey()))
         && execStatement(QStringLiteral(
                "CREATE TABLE IF NOT EXISTS play_history ("
-               "id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY, "
+               "id %1, "
                "file_path VARCHAR(768) UNIQUE NOT NULL, "
                "file_name VARCHAR(512) NOT NULL, "
                "file_type VARCHAR(32) NOT NULL, "
@@ -153,16 +160,18 @@ bool MigrationRunner::migrateToVersion1()
                "play_count INTEGER DEFAULT 0, "
                "last_position BIGINT DEFAULT 0, "
                "duration BIGINT DEFAULT 0, "
-               "is_completed TINYINT DEFAULT 0)"))
+               "is_completed TINYINT DEFAULT 0)")
+               .arg(autoIncrementPrimaryKey()))
         && execStatement(QStringLiteral(
                "CREATE TABLE IF NOT EXISTS video_history ("
-               "id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY, "
+               "id %1, "
                "file_path VARCHAR(768) UNIQUE NOT NULL, "
                "file_name VARCHAR(512) NOT NULL, "
                "position BIGINT DEFAULT 0, "
                "duration BIGINT DEFAULT 0, "
                "last_play_time VARCHAR(32) NOT NULL, "
-               "play_count INTEGER DEFAULT 0)"));
+               "play_count INTEGER DEFAULT 0)")
+               .arg(autoIncrementPrimaryKey()));
 }
 
 bool MigrationRunner::migrateToVersion2()
@@ -185,7 +194,7 @@ bool MigrationRunner::migrateToVersion3()
 {
     if (!createIndexIfMissing(QStringLiteral("danmaku"),
                               QStringLiteral("idx_danmaku_video_timestamp"),
-                              QStringLiteral("video_path(255), timestamp"))
+                              danmakuVideoTimestampIndexColumns())
         || !createIndexIfMissing(QStringLiteral("danmaku"),
                                  QStringLiteral("idx_danmaku_username"),
                                  QStringLiteral("username"))
@@ -219,16 +228,30 @@ bool MigrationRunner::migrateToVersion5()
 
 bool MigrationRunner::writeVersion(int version)
 {
-    QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
-        "INSERT INTO schema_version (id, version, updated_at) "
-        "VALUES (1, :version, :updated_at) "
-        "ON DUPLICATE KEY UPDATE version = VALUES(version), updated_at = VALUES(updated_at)"));
-    query.bindValue(QStringLiteral(":version"), version);
-    query.bindValue(QStringLiteral(":updated_at"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    const QString updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
 
-    if (!query.exec()) {
-        setLastError(query.lastError().text());
+    QSqlQuery update(m_db);
+    update.prepare(QStringLiteral(
+        "UPDATE schema_version SET version = :version, updated_at = :updated_at WHERE id = 1"));
+    update.bindValue(QStringLiteral(":version"), version);
+    update.bindValue(QStringLiteral(":updated_at"), updatedAt);
+    if (!update.exec()) {
+        setLastError(update.lastError().text());
+        return false;
+    }
+    if (update.numRowsAffected() > 0) {
+        m_lastError.clear();
+        return true;
+    }
+
+    QSqlQuery insert(m_db);
+    insert.prepare(QStringLiteral(
+        "INSERT INTO schema_version (id, version, updated_at) "
+        "VALUES (1, :version, :updated_at)"));
+    insert.bindValue(QStringLiteral(":version"), version);
+    insert.bindValue(QStringLiteral(":updated_at"), updatedAt);
+    if (!insert.exec()) {
+        setLastError(insert.lastError().text());
         return false;
     }
 
@@ -249,6 +272,19 @@ bool MigrationRunner::addColumnIfMissing(const QString& tableName,
 
 bool MigrationRunner::columnExists(const QString& tableName, const QString& columnName) const
 {
+    if (isSqlite()) {
+        QSqlQuery query(m_db);
+        if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(sqliteIdentifier(tableName)))) {
+            return false;
+        }
+        while (query.next()) {
+            if (query.value(1).toString().compare(columnName, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral(
         "SELECT 1 FROM information_schema.columns "
@@ -261,6 +297,15 @@ bool MigrationRunner::columnExists(const QString& tableName, const QString& colu
 
 bool MigrationRunner::tableExists(const QString& tableName) const
 {
+    if (isSqlite()) {
+        QSqlQuery query(m_db);
+        query.prepare(QStringLiteral(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type IN ('table', 'view') AND name = :table_name LIMIT 1"));
+        query.bindValue(QStringLiteral(":table_name"), tableName);
+        return query.exec() && query.next();
+    }
+
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral(
         "SELECT 1 FROM information_schema.tables "
@@ -285,6 +330,19 @@ bool MigrationRunner::createIndexIfMissing(const QString& tableName,
 
 bool MigrationRunner::indexExists(const QString& tableName, const QString& indexName) const
 {
+    if (isSqlite()) {
+        QSqlQuery query(m_db);
+        if (!query.exec(QStringLiteral("PRAGMA index_list(%1)").arg(sqliteIdentifier(tableName)))) {
+            return false;
+        }
+        while (query.next()) {
+            if (query.value(1).toString().compare(indexName, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral(
         "SELECT 1 FROM information_schema.statistics "
@@ -417,4 +475,28 @@ bool MigrationRunner::isMysql() const
 {
     const QString driverName = m_db.driverName().toUpper();
     return driverName == QStringLiteral("QMYSQL");
+}
+
+bool MigrationRunner::isSqlite() const
+{
+    const QString driverName = m_db.driverName().toUpper();
+    return driverName == QStringLiteral("QSQLITE");
+}
+
+QString MigrationRunner::autoIncrementPrimaryKey() const
+{
+    if (isSqlite()) {
+        return QStringLiteral("INTEGER PRIMARY KEY AUTOINCREMENT");
+    }
+
+    return QStringLiteral("INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY");
+}
+
+QString MigrationRunner::danmakuVideoTimestampIndexColumns() const
+{
+    if (isMysql()) {
+        return QStringLiteral("video_path(255), timestamp");
+    }
+
+    return QStringLiteral("video_path, timestamp");
 }

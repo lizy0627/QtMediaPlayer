@@ -1,19 +1,9 @@
 #include "mediafileprobe.h"
 
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
-#include <QMediaPlayer>
-#include <QTimer>
-#include <QUrl>
-
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-#include <QMediaContent>
-#endif
 
 namespace {
-constexpr int kProbeTimeoutMs = 3000;
-
 const char* const kAudioExtensions[] = {
     "aac",
     "flac",
@@ -63,128 +53,6 @@ MediaRoute routeForSuffix(const QString& suffix)
     }
     return MediaRoute::Unsupported;
 }
-
-bool isRecognizedStatus(QMediaPlayer::MediaStatus status)
-{
-    return status == QMediaPlayer::LoadedMedia
-        || status == QMediaPlayer::BufferedMedia
-        || status == QMediaPlayer::BufferingMedia;
-}
-
-bool isFinishedStatus(QMediaPlayer::MediaStatus status)
-{
-    return isRecognizedStatus(status) || status == QMediaPlayer::InvalidMedia;
-}
-
-void loadLocalFile(QMediaPlayer& player, const QString& filePath)
-{
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    player.setSource(QUrl::fromLocalFile(filePath));
-#else
-    player.setMedia(QUrl::fromLocalFile(filePath));
-#endif
-}
-
-void clearPlayerSource(QMediaPlayer& player)
-{
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    player.setSource(QUrl());
-#else
-    player.setMedia(QMediaContent());
-#endif
-}
-
-MediaProbeResult probePlayable(const QString& filePath, MediaRoute route)
-{
-    QMediaPlayer player;
-    QEventLoop eventLoop;
-    QTimer timeoutTimer;
-    bool timedOut = false;
-    bool hasError = false;
-
-    timeoutTimer.setSingleShot(true);
-
-    QObject::connect(&player,
-                     &QMediaPlayer::mediaStatusChanged,
-                     &eventLoop,
-                     [&](QMediaPlayer::MediaStatus status) {
-                         if (isFinishedStatus(status) && eventLoop.isRunning()) {
-                             eventLoop.quit();
-                         }
-                     });
-
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    QObject::connect(&player,
-                     &QMediaPlayer::errorOccurred,
-                     &eventLoop,
-                     [&](QMediaPlayer::Error error, const QString&) {
-                         if (error != QMediaPlayer::NoError) {
-                             hasError = true;
-                             if (eventLoop.isRunning()) {
-                                 eventLoop.quit();
-                             }
-                         }
-                     });
-#else
-    QObject::connect(&player,
-                     QOverload<QMediaPlayer::Error>::of(&QMediaPlayer::error),
-                     &eventLoop,
-                     [&](QMediaPlayer::Error error) {
-                         if (error != QMediaPlayer::NoError) {
-                             hasError = true;
-                             if (eventLoop.isRunning()) {
-                                 eventLoop.quit();
-                             }
-                         }
-                     });
-#endif
-
-    QObject::connect(&timeoutTimer, &QTimer::timeout, &eventLoop, [&]() {
-        timedOut = true;
-        eventLoop.quit();
-    });
-
-    loadLocalFile(player, filePath);
-
-    if (!isFinishedStatus(player.mediaStatus()) && !hasError) {
-        timeoutTimer.start(kProbeTimeoutMs);
-        eventLoop.exec();
-    }
-
-    if (timeoutTimer.isActive()) {
-        timeoutTimer.stop();
-    }
-
-    const bool recognized = isRecognizedStatus(player.mediaStatus());
-    const bool invalid = player.mediaStatus() == QMediaPlayer::InvalidMedia;
-    const bool playerError = player.error() != QMediaPlayer::NoError;
-
-    player.stop();
-    clearPlayerSource(player);
-
-    if (recognized && !playerError) {
-        return makeResult(true, QString(), route);
-    }
-
-    if (timedOut) {
-        return makeResult(false,
-                          QStringLiteral("\u5a92\u4f53\u63a2\u6d4b\u8d85\u65f6\uff0c\u53ef\u80fd\u6587\u4ef6\u635f\u574f\u6216\u5f53\u524d\u89e3\u7801\u5668\u4e0d\u652f\u6301"),
-                          route);
-    }
-
-    if (invalid || playerError || hasError) {
-        QString reason = QStringLiteral("\u5a92\u4f53\u683c\u5f0f\u6216\u7f16\u7801\u4e0d\u53d7\u5f53\u524d\u73af\u5883\u652f\u6301");
-        const QString detail = player.errorString().trimmed();
-        if (!detail.isEmpty()) {
-            reason += QStringLiteral("\nQt \u8fd4\u56de\uff1a%1").arg(detail);
-        }
-        return makeResult(false, reason, route);
-    }
-
-    return makeResult(false,
-                      QStringLiteral("\u5a92\u4f53\u63a2\u6d4b\u8d85\u65f6\uff0c\u53ef\u80fd\u6587\u4ef6\u635f\u574f\u6216\u5f53\u524d\u89e3\u7801\u5668\u4e0d\u652f\u6301"),
-                      route);
-}
 }
 
 MediaProbeResult MediaFileProbe::probe(const QString& filePath)
@@ -224,12 +92,31 @@ MediaProbeResult MediaFileProbe::probe(const QString& filePath)
                           MediaRoute::Unsupported);
     }
 
-    return probePlayable(fileInfo.absoluteFilePath(), route);
+    return makeResult(true, QString(), route);
 }
 
 MediaProbeResult MediaFileProbe::probeLocalFile(const QString& filePath)
 {
     return probe(filePath);
+}
+
+QList<ProbedMediaFile> MediaFileProbe::probeFiles(const QStringList& files)
+{
+    QList<ProbedMediaFile> results;
+    results.reserve(files.size());
+
+    for (const QString& filePath : files) {
+        const MediaProbeResult probeResult = probe(filePath);
+
+        ProbedMediaFile probedFile;
+        probedFile.filePath = filePath;
+        probedFile.route = probeResult.route;
+        probedFile.supported = probeResult.supported;
+        probedFile.reason = probeResult.reason;
+        results.append(probedFile);
+    }
+
+    return results;
 }
 
 QStringList MediaFileProbe::supportedAudioFormats()

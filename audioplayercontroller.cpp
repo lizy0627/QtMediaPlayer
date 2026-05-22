@@ -6,6 +6,7 @@
 #include <QMediaPlayer>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QtGlobal>
 
 #include "audioplaybackcontroller.h"
 #include "audiotrack.h"
@@ -15,13 +16,56 @@
 #include "network/onlinemusicservice.h"
 
 namespace {
+constexpr qint64 kResumeNearEndThresholdMs = 5000;
 const QString kOnlineAudioPrefix = QStringLiteral("online-audio:");
 const QString kDefaultOnlineAudioSource = QStringLiteral("netease");
+
+bool isReadyForDeferredSeek(QMediaPlayer::MediaStatus status)
+{
+    return status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia;
+}
 
 bool isHttpUrl(const QString& value)
 {
     return value.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
         || value.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive);
+}
+
+bool isPlayableRemoteUrl(const QUrl& url)
+{
+    const QString scheme = url.scheme().toLower();
+    return url.isValid()
+        && !url.isEmpty()
+        && (scheme == QStringLiteral("http") || scheme == QStringLiteral("https"))
+        && !url.host().isEmpty();
+}
+
+QString playbackErrorCategory(QMediaPlayer::Error error)
+{
+    switch (error) {
+    case QMediaPlayer::ResourceError:
+        return QStringLiteral("\u8d44\u6e90\u9519\u8bef");
+    case QMediaPlayer::FormatError:
+        return QStringLiteral("\u683c\u5f0f\u9519\u8bef");
+    case QMediaPlayer::NetworkError:
+        return QStringLiteral("\u7f51\u7edc\u9519\u8bef");
+    case QMediaPlayer::AccessDeniedError:
+        return QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd");
+    case QMediaPlayer::NoError:
+        return QString();
+    default:
+        return QStringLiteral("\u64ad\u653e\u9519\u8bef");
+    }
+}
+
+QString invalidOnlineAudioUrlMessage(const QString& detail = QString())
+{
+    QString message = QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u672a\u8fd4\u56de\u53ef\u64ad\u653e\u7684 http/https \u97f3\u9891\u76f4\u94fe\u3002");
+    const QString trimmedDetail = detail.trimmed();
+    if (!trimmedDetail.isEmpty()) {
+        message += QLatin1Char('\n') + trimmedDetail;
+    }
+    return message;
 }
 
 QString playbackErrorMessage(QMediaPlayer::Error error, const QString& errorString)
@@ -31,19 +75,19 @@ QString playbackErrorMessage(QMediaPlayer::Error error, const QString& errorStri
     case QMediaPlayer::NoError:
         return QString();
     case QMediaPlayer::ResourceError:
-        message = QStringLiteral("资源错误：无法打开媒体文件");
+        message = QStringLiteral("\u8d44\u6e90\u9519\u8bef\uff1a\u65e0\u6cd5\u6253\u5f00\u97f3\u9891\u8d44\u6e90\uff0c\u6587\u4ef6\u6216\u64ad\u653e\u5730\u5740\u53ef\u80fd\u5df2\u5931\u6548\u3002");
         break;
     case QMediaPlayer::FormatError:
-        message = QStringLiteral("格式错误：不支持的媒体格式");
+        message = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1a\u5f53\u524d\u97f3\u9891\u683c\u5f0f\u6216\u7b2c\u4e09\u65b9\u8fd4\u56de\u5185\u5bb9\u4e0d\u53d7\u652f\u6301\u3002");
         break;
     case QMediaPlayer::NetworkError:
-        message = QStringLiteral("网络错误：无法访问网络资源");
+        message = QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u65e0\u6cd5\u8bbf\u95ee\u8fdc\u7a0b\u97f3\u9891\u8d44\u6e90\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7a0d\u540e\u91cd\u8bd5\u3002");
         break;
     case QMediaPlayer::AccessDeniedError:
-        message = QStringLiteral("访问被拒绝：没有权限访问该文件");
+        message = QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd\uff1a\u8be5\u97f3\u9891\u53ef\u80fd\u9700\u8981\u767b\u5f55\u3001Referer \u6216\u5176\u4ed6\u6388\u6743\u4fe1\u606f\u3002");
         break;
     default:
-        message = QStringLiteral("未知播放错误");
+        message = QStringLiteral("\u64ad\u653e\u5668\u53d1\u751f\u672a\u77e5\u9519\u8bef\u3002");
         break;
     }
 
@@ -68,6 +112,32 @@ QString mediaProbeWarningMessage(const QStringList& failedFiles)
 QString mediaProbeWarningMessage(const ProbeResult& result)
 {
     return mediaProbeWarningMessage(QStringList{result.reason});
+}
+
+bool trackMatchesOnlineSource(const AudioTrack& track, const QString& sourceId)
+{
+    const QString normalizedSourceId = sourceId.trimmed();
+    if (normalizedSourceId.isEmpty() || track.isLocal) {
+        return false;
+    }
+
+    return track.sourceId.trimmed() == normalizedSourceId
+        || track.id.trimmed() == normalizedSourceId;
+}
+
+int findOnlineTrackBySourceId(const PlaylistModel* playlistModel, const QString& sourceId)
+{
+    if (!playlistModel) {
+        return -1;
+    }
+
+    for (int i = 0; i < playlistModel->count(); ++i) {
+        if (trackMatchesOnlineSource(playlistModel->at(i), sourceId)) {
+            return i;
+        }
+    }
+
+    return -1;
 }
 }
 
@@ -131,6 +201,7 @@ void AudioPlayerController::addLocalFiles(const QStringList& files)
     }
 
     if (!wasPlaying) {
+        clearPendingSeek();
         m_playlistModel->setCurrentIndex(firstAddedIndex);
         play();
         return;
@@ -145,7 +216,8 @@ void AudioPlayerController::addOnlineSong(const SongInfo& song)
         ? song.id.trimmed()
         : song.sourceId.trimmed();
     if (sourceId.isEmpty()) {
-        emit warningRequested(QStringLiteral("错误"), QStringLiteral("在线歌曲缺少来源 ID，无法加入播放列表。"));
+        emit warningRequested(QStringLiteral("\u5728\u7ebf\u6b4c\u66f2\u4fe1\u606f\u4e0d\u5b8c\u6574"),
+                              QStringLiteral("\u7b2c\u4e09\u65b9\u7ed3\u679c\u7f3a\u5c11\u6765\u6e90 ID\uff0c\u65e0\u6cd5\u52a0\u5165\u64ad\u653e\u5217\u8868\u3002"));
         return;
     }
 
@@ -168,6 +240,7 @@ void AudioPlayerController::addOnlineSong(const SongInfo& song)
     m_playlistModel->add(track);
 
     if (!m_playbackController->isPlaying()) {
+        clearPendingSeek();
         m_playlistModel->setCurrentIndex(m_playlistModel->count() - 1);
         play();
     }
@@ -224,7 +297,7 @@ bool AudioPlayerController::playHistoryRecord(const MediaHistoryRecord& record)
     m_playlistModel->setCurrentIndex(m_playlistModel->count() - 1);
     play();
     if (!record.isCompleted && record.lastPosition > 0) {
-        m_playbackController->setPosition(record.lastPosition);
+        schedulePendingSeek(record.lastPosition);
     }
     return true;
 }
@@ -248,6 +321,7 @@ bool AudioPlayerController::removeTrackAt(int index)
         return true;
     }
 
+    clearPendingSeek();
     m_playbackController->stop();
     if (m_playlistModel->isEmpty()) {
         syncLyricsForCurrentTrack();
@@ -265,6 +339,7 @@ bool AudioPlayerController::removeTrackAt(int index)
 
 void AudioPlayerController::clearPlaylist()
 {
+    clearPendingSeek();
     m_playbackController->stop();
     m_playlistModel->clear();
     syncLyricsForCurrentTrack();
@@ -291,6 +366,11 @@ void AudioPlayerController::play()
                                   mediaProbeWarningMessage(probeResult));
             return;
         }
+    } else if (!isPlayableRemoteUrl(track.url)) {
+        const QString message = invalidOnlineAudioUrlMessage(track.url.toString());
+        markCurrentTrackFailed(message);
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"), message);
+        return;
     }
 
     QMediaPlayer* player = m_playbackController->player();
@@ -330,6 +410,7 @@ void AudioPlayerController::togglePlayback()
 
 void AudioPlayerController::playAt(int index)
 {
+    clearPendingSeek();
     m_playlistModel->setCurrentIndex(index);
     play();
 }
@@ -337,6 +418,7 @@ void AudioPlayerController::playAt(int index)
 void AudioPlayerController::playPrevious()
 {
     if (m_playlistModel->moveToPrevious()) {
+        clearPendingSeek();
         play();
     }
 }
@@ -344,6 +426,7 @@ void AudioPlayerController::playPrevious()
 void AudioPlayerController::playNext()
 {
     if (m_playlistModel->moveToNext()) {
+        clearPendingSeek();
         play();
     }
 }
@@ -355,6 +438,7 @@ void AudioPlayerController::setPlayMode(PlaylistPlayMode mode)
 
 void AudioPlayerController::setPosition(qint64 position)
 {
+    clearPendingSeek();
     m_playbackController->setPosition(position);
 }
 
@@ -365,7 +449,10 @@ void AudioPlayerController::setVolume(int volume)
 
 void AudioPlayerController::handleMediaStatusChanged(int status)
 {
+    tryApplyPendingSeek(status);
+
     if (status == QMediaPlayer::EndOfMedia) {
+        clearPendingSeek();
         m_lastHistoryStartKey.clear();
         if (m_playlistModel->playMode() == PlaylistSingleLoop) {
             m_playbackController->setPosition(0);
@@ -374,12 +461,19 @@ void AudioPlayerController::handleMediaStatusChanged(int status)
             playNext();
         }
     } else if (status == QMediaPlayer::InvalidMedia) {
+        clearPendingSeek();
         const bool isOnlineTrack = m_playlistModel
             && m_playlistModel->hasCurrent()
             && !m_playlistModel->currentTrack().isLocal;
-        markCurrentTrackFailed(isOnlineTrack
-                                   ? QStringLiteral("播放地址不可用")
-                                   : QStringLiteral("媒体无效，无法播放。"));
+        const QString message = isOnlineTrack
+            ? invalidOnlineAudioUrlMessage(QStringLiteral("\u64ad\u653e\u5668\u62a5\u544a\u5a92\u4f53\u65e0\u6548\uff0c\u8be5\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002"))
+            : QStringLiteral("\u5a92\u4f53\u65e0\u6548\uff1a\u65e0\u6cd5\u52a0\u8f7d\u6216\u64ad\u653e\u5f53\u524d\u97f3\u9891\u3002");
+        markCurrentTrackFailed(message);
+        emit warningRequested(isOnlineTrack
+                                  ? QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548")
+                                  : QStringLiteral("\u683c\u5f0f\u9519\u8bef"),
+                              message);
+        return;
     }
 }
 
@@ -400,12 +494,17 @@ void AudioPlayerController::handlePlayerError(int error, const QString& errorStr
 
     QString message = playbackErrorMessage(mediaError, errorString);
     if (m_playlistModel && m_playlistModel->hasCurrent() && !m_playlistModel->currentTrack().isLocal) {
-        message = errorString.trimmed().isEmpty()
-            ? QStringLiteral("播放地址不可用")
-            : QStringLiteral("播放地址不可用\n%1").arg(errorString.trimmed());
+        message = QStringLiteral("%1\uff1a\u5728\u7ebf\u97f3\u9891\u64ad\u653e\u5730\u5740\u4e0d\u53ef\u7528\uff0c\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u3001\u4e0d\u53ef\u8bbf\u95ee\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002")
+                      .arg(playbackErrorCategory(mediaError));
+        if (!errorString.trimmed().isEmpty()) {
+            message += QLatin1Char('\n') + errorString.trimmed();
+        }
+        markCurrentTrackFailed(message);
+        emit warningRequested(playbackErrorCategory(mediaError), message);
+        return;
     }
     markCurrentTrackFailed(message);
-    emit warningRequested(QStringLiteral("播放错误"), message);
+    emit warningRequested(playbackErrorCategory(mediaError), message);
 }
 
 QString AudioPlayerController::diagnosticText() const
@@ -534,6 +633,10 @@ void AudioPlayerController::markCurrentTrackFailed(const QString& message)
         return;
     }
 
+    clearPendingSeek();
+    if (m_playbackController) {
+        m_playbackController->stop();
+    }
     m_playlistModel->updateCurrentTrackPlaybackStatus(AudioTrackPlaybackStatus::Failed, message);
 }
 
@@ -566,8 +669,11 @@ void AudioPlayerController::resolveCurrentOnlineTrack()
         ? track.sourceId.trimmed()
         : track.id.trimmed();
     if (sourceId.isEmpty() || !m_onlineMusicService) {
-        markCurrentTrackFailed(QStringLiteral("播放地址不可用"));
-        emit warningRequested(QStringLiteral("播放错误"), QStringLiteral("播放地址不可用"));
+        const QString message = sourceId.isEmpty()
+            ? QStringLiteral("\u65e0\u6cd5\u89e3\u6790\u5728\u7ebf\u6b4c\u66f2\uff1a\u7f3a\u5c11\u7b2c\u4e09\u65b9\u6765\u6e90 ID\u3002")
+            : QStringLiteral("\u65e0\u6cd5\u89e3\u6790\u5728\u7ebf\u6b4c\u66f2\uff1a\u5728\u7ebf\u97f3\u4e50\u670d\u52a1\u672a\u521d\u59cb\u5316\u3002");
+        markCurrentTrackFailed(message);
+        emit warningRequested(QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25"), message);
         return;
     }
 
@@ -587,30 +693,98 @@ void AudioPlayerController::resolveCurrentOnlineTrack()
     m_onlineMusicService->resolveSongUrlAsync(sourceId);
 }
 
-void AudioPlayerController::onOnlineSongUrlResolved(const SongInfo& song)
+void AudioPlayerController::clearPendingSeek()
 {
-    if (!m_playlistModel || m_pendingResolveIndex < 0) {
+    m_pendingSeekPosition = -1;
+}
+
+qint64 AudioPlayerController::resolvedPendingSeekPosition(qint64 requestedPosition) const
+{
+    const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
+    const qint64 durationValue = player ? player->duration() : qint64(0);
+    qint64 targetPosition = qMax<qint64>(0, requestedPosition);
+
+    if (durationValue <= 0) {
+        return targetPosition;
+    }
+
+    if (targetPosition >= qMax<qint64>(0, durationValue - kResumeNearEndThresholdMs)) {
+        return 0;
+    }
+
+    return qBound<qint64>(0, targetPosition, qMax<qint64>(0, durationValue - 1));
+}
+
+void AudioPlayerController::schedulePendingSeek(qint64 position)
+{
+    if (position <= 0) {
+        clearPendingSeek();
         return;
     }
 
-    const int index = m_pendingResolveIndex;
+    m_pendingSeekPosition = position;
+
+    const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
+    if (!player) {
+        return;
+    }
+
+    tryApplyPendingSeek(static_cast<int>(player->mediaStatus()));
+}
+
+void AudioPlayerController::tryApplyPendingSeek(int status)
+{
+    const auto mediaStatus = static_cast<QMediaPlayer::MediaStatus>(status);
+    if (!isReadyForDeferredSeek(mediaStatus) || m_pendingSeekPosition < 0) {
+        return;
+    }
+
+    if (mediaStatus == QMediaPlayer::LoadedMedia) {
+        const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
+        if (player && player->duration() <= 0) {
+            return;
+        }
+    }
+
+    const qint64 targetPosition = resolvedPendingSeekPosition(m_pendingSeekPosition);
+    clearPendingSeek();
+    m_playbackController->setPosition(targetPosition);
+}
+
+void AudioPlayerController::onOnlineSongUrlResolved(const SongInfo& song)
+{
+    if (!m_playlistModel) {
+        return;
+    }
+
     const QString sourceId = song.sourceId.trimmed().isEmpty()
         ? song.id.trimmed()
         : song.sourceId.trimmed();
-    if (sourceId != m_pendingResolveSourceId || index >= m_playlistModel->count()) {
+    if (sourceId.isEmpty()) {
+        return;
+    }
+
+    int index = -1;
+    if (sourceId == m_pendingResolveSourceId
+        && m_pendingResolveIndex >= 0
+        && m_pendingResolveIndex < m_playlistModel->count()) {
+        index = m_pendingResolveIndex;
+    }
+    if (index < 0 || !trackMatchesOnlineSource(m_playlistModel->at(index), sourceId)) {
+        index = findOnlineTrackBySourceId(m_playlistModel, sourceId);
+    }
+    if (index < 0) {
         return;
     }
 
     AudioTrack track = m_playlistModel->at(index);
-    if (track.sourceId.trimmed() != sourceId && track.id.trimmed() != sourceId) {
+    if (!trackMatchesOnlineSource(track, sourceId)) {
         return;
     }
 
     const QUrl resolvedUrl(song.url);
-    if (!resolvedUrl.isValid()
-        || (resolvedUrl.scheme() != QStringLiteral("http") && resolvedUrl.scheme() != QStringLiteral("https"))
-        || resolvedUrl.host().isEmpty()) {
-        onOnlineSongUrlResolveError(sourceId, QStringLiteral("播放地址不可用"));
+    if (!isPlayableRemoteUrl(resolvedUrl)) {
+        onOnlineSongUrlResolveError(sourceId, invalidOnlineAudioUrlMessage(song.url));
         return;
     }
 
@@ -621,14 +795,19 @@ void AudioPlayerController::onOnlineSongUrlResolved(const SongInfo& song)
     if (track.lyricUrl.trimmed().isEmpty()) {
         track.lyricUrl = song.lyricUrl;
     }
-    track.playbackStatus = AudioTrackPlaybackStatus::Loading;
-    track.statusMessage = QStringLiteral("播放地址已解析，正在加载在线音频。");
+    const bool isCurrentTrack = index == m_playlistModel->currentIndex();
+    track.playbackStatus = isCurrentTrack
+        ? AudioTrackPlaybackStatus::Loading
+        : AudioTrackPlaybackStatus::Idle;
+    track.statusMessage = isCurrentTrack
+        ? QStringLiteral("\u64ad\u653e\u5730\u5740\u5df2\u89e3\u6790\uff0c\u6b63\u5728\u52a0\u8f7d\u5728\u7ebf\u97f3\u9891\u3002")
+        : QStringLiteral("\u64ad\u653e\u5730\u5740\u5df2\u89e3\u6790\uff0c\u7b49\u5f85\u64ad\u653e\u3002");
     m_playlistModel->updateTrack(index, track);
 
     m_pendingResolveIndex = -1;
     m_pendingResolveSourceId.clear();
 
-    if (index == m_playlistModel->currentIndex()) {
+    if (isCurrentTrack) {
         play();
     }
 }
@@ -639,17 +818,33 @@ void AudioPlayerController::onOnlineSongUrlResolveError(const QString& songId, c
         return;
     }
 
+    const QString sourceId = songId.trimmed();
     const QString failureMessage = message.trimmed().isEmpty()
-        ? QStringLiteral("播放地址不可用")
+        ? QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u672a\u8fd4\u56de\u53ef\u64ad\u653e\u7684\u97f3\u9891\u76f4\u94fe\u3002")
         : message.trimmed();
-    const int index = m_pendingResolveIndex;
-    if (songId.trimmed() == m_pendingResolveSourceId && index >= 0 && index < m_playlistModel->count()) {
-        m_playlistModel->updateTrackPlaybackStatus(index,
-                                                   AudioTrackPlaybackStatus::Failed,
-                                                   failureMessage);
+
+    int index = -1;
+    if (sourceId == m_pendingResolveSourceId
+        && m_pendingResolveIndex >= 0
+        && m_pendingResolveIndex < m_playlistModel->count()) {
+        index = m_pendingResolveIndex;
+    }
+    if (index < 0 || !trackMatchesOnlineSource(m_playlistModel->at(index), sourceId)) {
+        index = findOnlineTrackBySourceId(m_playlistModel, sourceId);
+    }
+
+    if (index >= 0) {
         if (index == m_playlistModel->currentIndex()) {
-            emit warningRequested(QStringLiteral("播放错误"), failureMessage);
+            markCurrentTrackFailed(failureMessage);
+            emit warningRequested(QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25"), failureMessage);
+        } else {
+            m_playlistModel->updateTrackPlaybackStatus(index,
+                                                       AudioTrackPlaybackStatus::Failed,
+                                                       failureMessage);
         }
+    }
+
+    if (sourceId == m_pendingResolveSourceId) {
         m_pendingResolveIndex = -1;
         m_pendingResolveSourceId.clear();
     }

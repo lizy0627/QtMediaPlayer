@@ -14,7 +14,7 @@ constexpr int kBilibiliRequestTimeoutMs = 12000;
 
 QString browserOnlyText()
 {
-    return QStringLiteral("\n\n只能浏览器打开。");
+    return QStringLiteral("\n\n\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u6253\u5f00\uff1a\u5e73\u53f0\u672a\u8fd4\u56de\u53ef\u76f4\u63a5\u4ea4\u7ed9 QMediaPlayer \u7684\u5355\u4e00 http/https \u5a92\u4f53\u76f4\u94fe\u3002");
 }
 
 QString bilibiliUserAgent()
@@ -177,9 +177,19 @@ QJsonObject jsonObjectFromResult(const NetworkResult& result, QString* errorMess
 {
     if (!result.ok()) {
         if (errorMessage) {
-            *errorMessage = result.errorMessage.isEmpty()
-                ? QStringLiteral("Bilibili 接口请求失败。")
+            const QString detail = result.errorMessage.isEmpty()
+                ? QStringLiteral("Bilibili \u63a5\u53e3\u8bf7\u6c42\u5931\u8d25\u3002")
                 : result.errorMessage;
+            if (result.timedOut || result.networkErrorCode != 0) {
+                *errorMessage = QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u65e0\u6cd5\u8bbf\u95ee Bilibili \u64ad\u653e\u63a5\u53e3\u3002\n%1").arg(detail);
+            } else if (result.httpStatus >= 400) {
+                *errorMessage = QStringLiteral("\u8d44\u6e90\u9519\u8bef\uff1aBilibili \u64ad\u653e\u63a5\u53e3\u8fd4\u56de HTTP %1\u3002\n%2")
+                                    .arg(result.httpStatus)
+                                    .arg(detail);
+            } else {
+                *errorMessage = detail;
+            }
+            return {};
         }
         return {};
     }
@@ -188,7 +198,9 @@ QJsonObject jsonObjectFromResult(const NetworkResult& result, QString* errorMess
     const QJsonDocument document = QJsonDocument::fromJson(result.body, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("Bilibili 接口响应解析失败：%1").arg(parseError.errorString());
+            *errorMessage = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1aBilibili \u63a5\u53e3\u54cd\u5e94\u4e0d\u662f\u53ef\u89e3\u6790\u7684 JSON\u3002\n%1")
+                                .arg(parseError.errorString());
+            return {};
         }
         return {};
     }

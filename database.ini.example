@@ -1,4 +1,10 @@
 [Database]
+; SQLite is the default when no database.ini or database environment variables are present.
+; To force SQLite and choose a custom file:
+; driver=QSQLITE
+; name=C:/Users/you/AppData/Roaming/QtMediaPlayer/QtMediaPlayer/qtmediaplayer.sqlite3
+
+; MySQL remains supported. Uncomment or keep the settings below to prefer MySQL.
 driver=QMYSQL
 host=127.0.0.1
 port=3306
@@ -12,6 +18,12 @@ connectOptions=MYSQL_OPT_RECONNECT=1
 ; 1. application directory/database.ini
 ; 2. QTMEDIAPLAYER_DB_CONFIG
 ; 3. user config directory/database.ini
+;
+; Environment override examples:
+; QTMEDIAPLAYER_DB_DRIVER=QSQLITE
+; QTMEDIAPLAYER_DB_NAME=C:/data/qtmediaplayer.sqlite3
+; QTMEDIAPLAYER_DB_DRIVER=QMYSQL
+; QTMEDIAPLAYER_DB_HOST=127.0.0.1
 ;
 ; Development seed users are disabled by default. Set
 ; QTMEDIAPLAYER_SEED_DEV_USERS=1 only for disposable local databases.

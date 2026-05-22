@@ -6,6 +6,21 @@
 #include <QVideoWidget>
 #include <QtGlobal>
 
+namespace {
+qint64 boundedMediaPosition(const QMediaPlayer* player, qint64 requestedPosition)
+{
+    const qint64 minPosition = 0;
+    const qint64 targetPosition = qMax(minPosition, requestedPosition);
+    const qint64 duration = player ? player->duration() : qint64(0);
+
+    if (duration <= 0) {
+        return targetPosition;
+    }
+
+    return qBound(minPosition, targetPosition, duration);
+}
+}
+
 VideoPlaybackController::VideoPlaybackController(QObject* parent)
     : QObject(parent)
 {
@@ -68,7 +83,8 @@ void VideoPlaybackController::toggle()
 void VideoPlaybackController::jump(bool forward, int ms)
 {
     const qint64 position = m_player->position();
-    m_player->setPosition(forward ? position + ms : position - ms);
+    const qint64 targetPosition = forward ? position + ms : position - ms;
+    m_player->setPosition(boundedMediaPosition(m_player, targetPosition));
 }
 
 void VideoPlaybackController::setVolume(int volume)

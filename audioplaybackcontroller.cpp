@@ -4,6 +4,21 @@
 #include <QMediaPlayer>
 #include <QtGlobal>
 
+namespace {
+qint64 boundedMediaPosition(const QMediaPlayer* player, qint64 requestedPosition)
+{
+    const qint64 minPosition = 0;
+    const qint64 targetPosition = qMax(minPosition, requestedPosition);
+    const qint64 duration = player ? player->duration() : qint64(0);
+
+    if (duration <= 0) {
+        return targetPosition;
+    }
+
+    return qBound(minPosition, targetPosition, duration);
+}
+}
+
 AudioPlaybackController::AudioPlaybackController(QObject* parent)
     : QObject(parent)
 {
@@ -60,7 +75,7 @@ bool AudioPlaybackController::isPlaying() const
 
 void AudioPlaybackController::setPosition(qint64 position)
 {
-    m_player->setPosition(position);
+    m_player->setPosition(boundedMediaPosition(m_player, position));
 }
 
 void AudioPlaybackController::setVolume(int volume)

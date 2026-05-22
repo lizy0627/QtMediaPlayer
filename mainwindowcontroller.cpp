@@ -9,10 +9,13 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QMessageBox>
+#include <QProgressDialog>
 #include <QStackedWidget>
 #include <QStringList>
 #include <QWidget>
+#include <QtConcurrent>
 
 MainWindowController::MainWindowController(QStackedWidget* pages,
                                            QWidget* videoPage,
@@ -29,7 +32,12 @@ MainWindowController::MainWindowController(QStackedWidget* pages,
     , m_audioPlayer(audioPlayer)
     , m_historyService(historyService)
     , m_playbackRouter(new MediaPlaybackRouter(audioPlayer, videoPlayer, this))
+    , m_probeWatcher(new QFutureWatcher<QList<ProbedMediaFile>>(this))
 {
+    connect(m_probeWatcher,
+            &QFutureWatcher<QList<ProbedMediaFile>>::finished,
+            this,
+            &MainWindowController::handleLocalMediaProbeFinished);
 }
 
 void MainWindowController::showVideoPage()
@@ -54,6 +62,13 @@ void MainWindowController::showAudioPage()
 
 void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
 {
+    if (m_probeRunning) {
+        QMessageBox::information(dialogParent,
+                                 QStringLiteral("\u63d0\u793a"),
+                                 QStringLiteral("\u6b63\u5728\u68c0\u6d4b\u6587\u4ef6\uff0c\u8bf7\u7a0d\u540e"));
+        return;
+    }
+
     const QString videoPattern = QStringLiteral("*.") + videoExtensions().join(QStringLiteral(" *."));
     const QString audioPattern = QStringLiteral("*.") + audioExtensions().join(QStringLiteral(" *."));
 
@@ -76,31 +91,67 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
         return;
     }
 
+    m_probeRunning = true;
+    m_probeDialogParent = dialogParent;
+
+    QProgressDialog* progressDialog = new QProgressDialog(dialogParent);
+    progressDialog->setWindowTitle(QStringLiteral("\u63d0\u793a"));
+    progressDialog->setLabelText(QStringLiteral("\u6b63\u5728\u68c0\u6d4b\u5a92\u4f53\u6587\u4ef6..."));
+    progressDialog->setCancelButton(nullptr);
+    progressDialog->setRange(0, 0);
+    progressDialog->setMinimumDuration(0);
+    progressDialog->setAutoClose(false);
+    progressDialog->setAutoReset(false);
+    progressDialog->show();
+    m_probeProgressDialog = progressDialog;
+
+    const auto future = QtConcurrent::run([selectedFiles]() {
+        return MediaFileProbe::probeFiles(selectedFiles);
+    });
+    m_probeWatcher->setFuture(future);
+}
+
+void MainWindowController::handleLocalMediaProbeFinished()
+{
+    const QList<ProbedMediaFile> probedFiles = m_probeWatcher->result();
+    m_probeRunning = false;
+
+    if (m_probeProgressDialog) {
+        m_probeProgressDialog->close();
+        m_probeProgressDialog->deleteLater();
+        m_probeProgressDialog.clear();
+    }
+
+    QWidget* dialogParent = m_probeDialogParent.data();
+    m_probeDialogParent.clear();
+
     QStringList videoFiles;
     QStringList audioFiles;
     QStringList unsupportedFiles;
     int unsupportedIndex = 1;
 
-    for (const QString& filePath : selectedFiles) {
-        const QFileInfo fileInfo(filePath);
-        const MediaProbeResult probeResult = MediaFileProbe::probe(filePath);
-        if (!probeResult.supported) {
-            const QString displayName = fileInfo.fileName().isEmpty() ? filePath : fileInfo.fileName();
-            unsupportedFiles.append(QStringLiteral("%1. %2：%3")
+    for (const ProbedMediaFile& probedFile : probedFiles) {
+        const QFileInfo fileInfo(probedFile.filePath);
+        if (!probedFile.supported) {
+            const QString displayName = fileInfo.fileName().isEmpty() ? probedFile.filePath : fileInfo.fileName();
+            const QString reason = probedFile.reason.isEmpty()
+                ? QStringLiteral("\u65e0\u6cd5\u8bc6\u522b\u8be5\u5a92\u4f53\u6587\u4ef6")
+                : probedFile.reason;
+            unsupportedFiles.append(QStringLiteral("%1. %2\uff1a%3")
                                         .arg(unsupportedIndex++)
-                                        .arg(displayName, probeResult.reason));
+                                        .arg(displayName, reason));
             continue;
         }
 
-        switch (probeResult.route) {
+        switch (probedFile.route) {
         case MediaRoute::Video:
-            videoFiles.append(filePath);
+            videoFiles.append(probedFile.filePath);
             break;
         case MediaRoute::Audio:
-            audioFiles.append(filePath);
+            audioFiles.append(probedFile.filePath);
             break;
         case MediaRoute::Unsupported:
-            unsupportedFiles.append(QStringLiteral("%1. %2：%3")
+            unsupportedFiles.append(QStringLiteral("%1. %2\uff1a%3")
                                         .arg(unsupportedIndex++)
                                         .arg(fileInfo.fileName(),
                                              QStringLiteral("\u5f53\u524d\u6587\u4ef6\u6269\u5c55\u540d\u4e0d\u5728\u652f\u6301\u5217\u8868\u4e2d\uff1a%1")
@@ -112,6 +163,23 @@ void MainWindowController::openLocalMediaFiles(QWidget* dialogParent)
     if (!videoFiles.isEmpty() && m_videoPlayer) {
         showVideoPage();
         m_videoPlayer->open(videoFiles.first());
+
+        if (videoFiles.size() > 1) {
+            QStringList ignoredVideoNames;
+            ignoredVideoNames.reserve(videoFiles.size() - 1);
+            for (int i = 1; i < videoFiles.size(); ++i) {
+                const QFileInfo fileInfo(videoFiles.at(i));
+                ignoredVideoNames.append(fileInfo.fileName().isEmpty()
+                                             ? videoFiles.at(i)
+                                             : fileInfo.fileName());
+            }
+
+            QMessageBox::information(
+                dialogParent,
+                QStringLiteral("\u89c6\u9891\u961f\u5217\u63d0\u793a"),
+                QStringLiteral("\u5f53\u524d\u53ea\u652f\u6301\u64ad\u653e\u7b2c\u4e00\u4e2a\u89c6\u9891\uff0c\u5176\u4f59\u89c6\u9891\u6682\u672a\u52a0\u5165\u961f\u5217\uff1a\n%1")
+                    .arg(ignoredVideoNames.join(QStringLiteral("\n"))));
+        }
     }
 
     if (!audioFiles.isEmpty() && m_audioPlayer) {

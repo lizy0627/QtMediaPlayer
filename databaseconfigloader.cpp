@@ -8,6 +8,29 @@
 #include <QStringList>
 
 namespace {
+DatabaseConfig sqliteDefaults()
+{
+    DatabaseConfig config;
+    config.driverName = QStringLiteral("QSQLITE");
+    config.databaseName = DatabaseConfigLoader::defaultSqliteDatabasePath();
+    config.createDatabase = true;
+    return config;
+}
+
+DatabaseConfig mysqlDefaults()
+{
+    DatabaseConfig config;
+    config.driverName = QStringLiteral("QMYSQL");
+    config.hostName = QStringLiteral("127.0.0.1");
+    config.port = 3306;
+    config.databaseName = QStringLiteral("qtmediaplayer");
+    config.userName = QStringLiteral("root");
+    config.password = QStringLiteral("123456");
+    config.connectOptions = QStringLiteral("MYSQL_OPT_RECONNECT=1");
+    config.createDatabase = true;
+    return config;
+}
+
 void appendCandidate(QStringList& candidates, const QString& path)
 {
     const QString trimmedPath = path.trimmed();
@@ -30,16 +53,36 @@ QString sanitizedConnectOptions(const QString& connectOptions)
 
 void applyDefaultRootPassword(DatabaseConfig& config)
 {
-    if (config.userName == QStringLiteral("root") && config.password.isEmpty()) {
+    if (config.driverName == QStringLiteral("QMYSQL")
+        && config.userName == QStringLiteral("root")
+        && config.password.isEmpty()) {
         config.password = QStringLiteral("123456");
     }
+}
+
+bool hasMysqlEnvironmentOverrides()
+{
+    return qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_HOST")
+        || qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_PORT")
+        || qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_USER")
+        || qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_PASSWORD")
+        || qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_OPTIONS")
+        || qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_CREATE");
 }
 
 void applyEnvironmentOverrides(DatabaseConfig& config)
 {
     if (qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_DRIVER")) {
-        config.driverName = DatabaseConfigLoader::normalizeDriverName(
+        const QString driverName = DatabaseConfigLoader::normalizeDriverName(
             qEnvironmentVariable("QTMEDIAPLAYER_DB_DRIVER"));
+        const QString sourcePath = config.sourcePath;
+        config = driverName == QStringLiteral("QMYSQL") ? mysqlDefaults() : sqliteDefaults();
+        config.driverName = driverName;
+        config.sourcePath = sourcePath;
+    } else if (config.sourcePath.isEmpty()
+               && config.driverName == QStringLiteral("QSQLITE")
+               && hasMysqlEnvironmentOverrides()) {
+        config = mysqlDefaults();
     }
     if (qEnvironmentVariableIsSet("QTMEDIAPLAYER_DB_HOST")) {
         config.hostName = qEnvironmentVariable("QTMEDIAPLAYER_DB_HOST");
@@ -77,7 +120,10 @@ QString DatabaseConfigLoader::normalizeDriverName(const QString& driverName)
     if (normalized == QStringLiteral("MYSQL")) {
         return QStringLiteral("QMYSQL");
     }
-    return normalized.isEmpty() ? QStringLiteral("QMYSQL") : normalized;
+    if (normalized == QStringLiteral("SQLITE")) {
+        return QStringLiteral("QSQLITE");
+    }
+    return normalized;
 }
 
 bool DatabaseConfigLoader::parseBool(const QString& value, bool fallback)
@@ -135,16 +181,35 @@ QString DatabaseConfigLoader::configPath()
     return QString();
 }
 
+QString DatabaseConfigLoader::defaultSqliteDatabasePath()
+{
+    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (basePath.isEmpty()) {
+        basePath = QCoreApplication::applicationDirPath();
+    }
+
+    return QDir(basePath).filePath(QStringLiteral("qtmediaplayer.sqlite3"));
+}
+
 DatabaseConfig DatabaseConfigLoader::load()
 {
-    DatabaseConfig config;
+    DatabaseConfig config = sqliteDefaults();
 
     const QString path = configPath();
     if (!path.isEmpty()) {
         QSettings settings(path, QSettings::IniFormat);
         settings.beginGroup(QStringLiteral("Database"));
-        config.driverName = normalizeDriverName(settings.value(QStringLiteral("driver"),
-                                                               config.driverName).toString());
+        const QString configuredDriver =
+            normalizeDriverName(settings.value(QStringLiteral("driver")).toString());
+        if (configuredDriver == QStringLiteral("QMYSQL")) {
+            config = mysqlDefaults();
+        } else if (configuredDriver == QStringLiteral("QSQLITE")) {
+            config = sqliteDefaults();
+        }
+        if (!configuredDriver.isEmpty()) {
+            config.driverName = configuredDriver;
+        }
+
         config.hostName = settings.value(QStringLiteral("host"), config.hostName).toString();
         config.port = settings.value(QStringLiteral("port"), config.port).toInt();
         config.databaseName = settings.value(QStringLiteral("name"), config.databaseName).toString();
@@ -160,6 +225,9 @@ DatabaseConfig DatabaseConfigLoader::load()
 
     applyEnvironmentOverrides(config);
     config.driverName = normalizeDriverName(config.driverName);
+    if (config.driverName == QStringLiteral("QSQLITE") && config.databaseName.trimmed().isEmpty()) {
+        config.databaseName = defaultSqliteDatabasePath();
+    }
     applyDefaultRootPassword(config);
     config.connectOptions = sanitizedConnectOptions(config.connectOptions);
     return config;

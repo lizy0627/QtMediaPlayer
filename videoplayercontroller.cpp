@@ -20,6 +20,105 @@ bool isReadyForDeferredSeek(QMediaPlayer::MediaStatus status)
     return status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia;
 }
 
+bool isPlayableRemoteUrl(const QUrl& url)
+{
+    const QString scheme = url.scheme().toLower();
+    return url.isValid()
+        && !url.isEmpty()
+        && (scheme == QStringLiteral("http") || scheme == QStringLiteral("https"))
+        && !url.host().isEmpty();
+}
+
+QString copyableOriginalLink(const OnlinePlaybackRequest& request)
+{
+    const QString pageUrl = request.pageUrl.trimmed();
+    if (!pageUrl.isEmpty()) {
+        return pageUrl;
+    }
+    return request.mediaUrl.toString();
+}
+
+QString browserOnlyMessage(const OnlinePlaybackRequest& request)
+{
+    QString message = request.errorMessage.trimmed();
+    if (message.isEmpty()) {
+        message = QStringLiteral("\u5f53\u524d\u7ed3\u679c\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u4e2d\u6253\u5f00\uff1a\u7b2c\u4e09\u65b9\u5e73\u53f0\u672a\u63d0\u4f9b\u53ef\u76f4\u63a5\u4ea4\u7ed9 QMediaPlayer \u7684\u5355\u4e00\u5a92\u4f53\u76f4\u94fe\u3002");
+    }
+
+    const QString originalLink = copyableOriginalLink(request);
+    if (!originalLink.isEmpty()) {
+        message += QStringLiteral("\n\n\u539f\u59cb\u94fe\u63a5\uff08\u53ef\u590d\u5236\u5230\u6d4f\u89c8\u5668\u6253\u5f00\uff09\uff1a\n%1")
+                       .arg(originalLink);
+    }
+    return message;
+}
+
+QString invalidOnlineVideoUrlMessage(const OnlinePlaybackRequest& request, const QString& detail)
+{
+    QString message = detail.trimmed();
+    if (message.isEmpty()) {
+        message = QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002");
+    }
+
+    const QString originalLink = copyableOriginalLink(request);
+    if (!originalLink.isEmpty()) {
+        message += QStringLiteral("\n\n\u539f\u59cb\u94fe\u63a5\uff08\u53ef\u590d\u5236\uff09\uff1a\n%1")
+                       .arg(originalLink);
+    } else if (!request.mediaUrl.isEmpty()) {
+        message += QStringLiteral("\n\n\u7b2c\u4e09\u65b9\u8fd4\u56de\u5730\u5740\uff1a\n%1")
+                       .arg(request.mediaUrl.toString());
+    }
+
+    return message;
+}
+
+QString playerErrorTitle(QMediaPlayer::Error error)
+{
+    switch (error) {
+    case QMediaPlayer::ResourceError:
+        return QStringLiteral("\u8d44\u6e90\u9519\u8bef");
+    case QMediaPlayer::FormatError:
+        return QStringLiteral("\u683c\u5f0f\u9519\u8bef");
+    case QMediaPlayer::NetworkError:
+        return QStringLiteral("\u7f51\u7edc\u9519\u8bef");
+    case QMediaPlayer::AccessDeniedError:
+        return QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd");
+    case QMediaPlayer::NoError:
+        return QString();
+    default:
+        return QStringLiteral("\u64ad\u653e\u9519\u8bef");
+    }
+}
+
+QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString)
+{
+    QString message;
+    switch (error) {
+    case QMediaPlayer::ResourceError:
+        message = QStringLiteral("\u8d44\u6e90\u9519\u8bef\uff1a\u65e0\u6cd5\u6253\u5f00\u89c6\u9891\u8d44\u6e90\uff0c\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002");
+        break;
+    case QMediaPlayer::FormatError:
+        message = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1a\u5f53\u524d\u89c6\u9891\u683c\u5f0f\u6216\u7b2c\u4e09\u65b9\u8fd4\u56de\u5185\u5bb9\u4e0d\u53d7\u652f\u6301\u3002");
+        break;
+    case QMediaPlayer::NetworkError:
+        message = QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u65e0\u6cd5\u8bbf\u95ee\u8fdc\u7a0b\u89c6\u9891\u8d44\u6e90\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7a0d\u540e\u91cd\u8bd5\u3002");
+        break;
+    case QMediaPlayer::AccessDeniedError:
+        message = QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd\uff1a\u8be5\u89c6\u9891\u53ef\u80fd\u9700\u8981 Cookie\u3001Referer\u3001\u767b\u5f55\u6743\u9650\u6216\u4e0d\u652f\u6301\u5728\u5ba2\u6237\u7aef\u76f4\u64ad\u3002");
+        break;
+    case QMediaPlayer::NoError:
+        return QString();
+    default:
+        message = QStringLiteral("\u64ad\u653e\u5668\u53d1\u751f\u672a\u77e5\u9519\u8bef\u3002");
+        break;
+    }
+
+    if (!errorString.trimmed().isEmpty()) {
+        message += QLatin1Char('\n') + errorString.trimmed();
+    }
+    return message;
+}
+
 QString mediaProbeWarningMessage(const ProbeResult& result)
 {
     return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
@@ -150,6 +249,11 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
                                   mediaProbeWarningMessage(probeResult));
             return false;
         }
+    } else if (!isPlayableRemoteUrl(QUrl::fromUserInput(filePath))) {
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002\n\n%1")
+                                  .arg(filePath));
+        return false;
     }
 
     clearPendingSeek();
@@ -355,14 +459,30 @@ void VideoPlayerController::onOnlinePlaybackResolved(const OnlinePlaybackRequest
     }
 
     if (request.resolution == PlaybackResolution::BrowserOnly) {
-        emit warningRequested(QStringLiteral("只能浏览器打开"), request.errorMessage);
+        m_playbackController->stop();
+        emit warningRequested(QStringLiteral("\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u6253\u5f00"),
+                              browserOnlyMessage(request));
         return;
     }
 
     if (request.resolution != PlaybackResolution::DirectPlayable
         || !request.valid
         || !request.mediaUrl.isValid()) {
-        emit warningRequested(QStringLiteral("错误"), request.errorMessage);
+        m_playbackController->stop();
+        const QString detail = request.errorMessage.trimmed().isEmpty()
+            ? QStringLiteral("\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002")
+            : request.errorMessage.trimmed();
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              invalidOnlineVideoUrlMessage(request, detail));
+        return;
+    }
+
+    if (!isPlayableRemoteUrl(request.mediaUrl)) {
+        m_playbackController->stop();
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              invalidOnlineVideoUrlMessage(
+                                  request,
+                                  QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u8fd4\u56de\u7684\u4e0d\u662f\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002")));
         return;
     }
 
@@ -376,7 +496,13 @@ void VideoPlayerController::onOnlinePlaybackResolved(const OnlinePlaybackRequest
 
 void VideoPlayerController::onOnlinePlaybackResolveFailed(const QString& message)
 {
-    emit warningRequested(QStringLiteral("错误"), message);
+    if (m_playbackController) {
+        m_playbackController->stop();
+    }
+    emit warningRequested(QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25"),
+                          message.trimmed().isEmpty()
+                              ? QStringLiteral("\u672a\u80fd\u89e3\u6790\u5728\u7ebf\u89c6\u9891\u64ad\u653e\u5730\u5740\u3002")
+                              : message.trimmed());
 }
 
 void VideoPlayerController::onPlaybackStateChanged(QMediaPlayer::PlaybackState state)
@@ -438,7 +564,12 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
     }
 
     if (status == QMediaPlayer::InvalidMedia) {
-        emit playbackError(QStringLiteral("无法加载当前视频，请检查文件或网络地址是否有效。"));
+        if (m_playbackController) {
+            m_playbackController->stop();
+        }
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u6587\u4ef6\u4e0d\u53ef\u7528\uff0c\u6216\u5728\u7ebf\u64ad\u653e\u5730\u5740\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u3001\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002"));
+        return;
     }
 }
 
@@ -448,30 +579,10 @@ void VideoPlayerController::onPlayerError(QMediaPlayer::Error error, const QStri
         return;
     }
 
-    QString errorMessage;
-    switch (error) {
-    case QMediaPlayer::ResourceError:
-        errorMessage = QStringLiteral("资源错误：无法打开视频。");
-        break;
-    case QMediaPlayer::FormatError:
-        errorMessage = QStringLiteral("格式错误：当前视频格式不受支持。");
-        break;
-    case QMediaPlayer::NetworkError:
-        errorMessage = QStringLiteral("网络错误：无法访问远程媒体资源。");
-        break;
-    case QMediaPlayer::AccessDeniedError:
-        errorMessage = QStringLiteral("访问被拒绝：当前媒体没有访问权限。");
-        break;
-    default:
-        errorMessage = QStringLiteral("播放器发生未知错误。");
-        break;
+    if (m_playbackController) {
+        m_playbackController->stop();
     }
-
-    if (!errorString.trimmed().isEmpty()) {
-        errorMessage += QLatin1Char('\n') + errorString.trimmed();
-    }
-
-    emit playbackError(errorMessage);
+    emit warningRequested(playerErrorTitle(error), playerErrorMessage(error, errorString));
 }
 
 void VideoPlayerController::saveCurrentProgress()

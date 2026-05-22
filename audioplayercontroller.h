@@ -63,6 +63,10 @@ private:
     void markCurrentTrackFailed(const QString& message);
     bool currentTrackNeedsOnlineResolve(const AudioTrack& track) const;
     void resolveCurrentOnlineTrack();
+    void clearPendingSeek();
+    qint64 resolvedPendingSeekPosition(qint64 requestedPosition) const;
+    void schedulePendingSeek(qint64 position);
+    void tryApplyPendingSeek(int status);
     QString historyKeyForTrack(const AudioTrack& track) const;
     bool populateTrackFromOnlineHistory(const QString& historyPath,
                                         const MediaHistoryRecord& record,
@@ -74,6 +78,7 @@ private:
     MediaHistoryService* m_mediaHistoryService = nullptr;
     OnlineMusicService* m_onlineMusicService = nullptr;
     QString m_lastHistoryStartKey;
+    qint64 m_pendingSeekPosition = -1;
     int m_pendingResolveIndex = -1;
     QString m_pendingResolveSourceId;
 };

@@ -36,6 +36,9 @@ private:
     bool mergeVideoHistoryIntoPlayHistory();
     bool execStatement(const QString& sql);
     bool isMysql() const;
+    bool isSqlite() const;
+    QString autoIncrementPrimaryKey() const;
+    QString danmakuVideoTimestampIndexColumns() const;
     void setLastError(const QString& message);
 
     QSqlDatabase m_db;

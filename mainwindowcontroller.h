@@ -1,16 +1,23 @@
 #ifndef MAINWINDOWCONTROLLER_H
 #define MAINWINDOWCONTROLLER_H
 
+#include "mediafileprobe.h"
+
+#include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
 class AudioPlayer;
 class MediaPlaybackRouter;
 class MediaHistoryService;
+class QProgressDialog;
 class QStackedWidget;
 class QWidget;
 class VideoPlayerWidget;
+template <typename T>
+class QFutureWatcher;
 struct MediaHistoryRecord;
 
 class MainWindowController : public QObject
@@ -36,6 +43,7 @@ public:
 private:
     QStringList videoExtensions() const;
     QStringList audioExtensions() const;
+    void handleLocalMediaProbeFinished();
 
     QStackedWidget* m_pages = nullptr;
     QWidget* m_videoPage = nullptr;
@@ -44,6 +52,10 @@ private:
     AudioPlayer* m_audioPlayer = nullptr;
     MediaHistoryService* m_historyService = nullptr;
     MediaPlaybackRouter* m_playbackRouter = nullptr;
+    QFutureWatcher<QList<ProbedMediaFile>>* m_probeWatcher = nullptr;
+    QPointer<QWidget> m_probeDialogParent;
+    QPointer<QProgressDialog> m_probeProgressDialog;
+    bool m_probeRunning = false;
 };
 
 #endif // MAINWINDOWCONTROLLER_H

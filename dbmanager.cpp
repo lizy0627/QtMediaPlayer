@@ -3,6 +3,9 @@
 #include "migrationrunner.h"
 
 #include <QDateTime>
+#include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
@@ -11,6 +14,11 @@ namespace {
 bool isMysqlDriver(const QString& driverName)
 {
     return DatabaseConfigLoader::normalizeDriverName(driverName) == QStringLiteral("QMYSQL");
+}
+
+bool isSqliteDriver(const QString& driverName)
+{
+    return DatabaseConfigLoader::normalizeDriverName(driverName) == QStringLiteral("QSQLITE");
 }
 
 QString availableDriversText()
@@ -25,10 +33,23 @@ QString escapedMysqlIdentifier(QString identifier)
 
 QString databaseIdentity(const DatabaseConfig& config)
 {
+    if (isSqliteDriver(config.driverName)) {
+        return QStringLiteral("%1:%2").arg(config.driverName, config.databaseName);
+    }
+
     return QStringLiteral("%1:%2:%3/%4")
         .arg(config.driverName, config.hostName)
         .arg(config.port)
         .arg(config.databaseName);
+}
+
+DatabaseConfig fallbackSqliteConfig()
+{
+    DatabaseConfig config;
+    config.driverName = QStringLiteral("QSQLITE");
+    config.databaseName = DatabaseConfigLoader::defaultSqliteDatabasePath();
+    config.createDatabase = true;
+    return config;
 }
 
 bool ensureMysqlDatabaseExists(const DatabaseConfig& config, QString* errorMessage)
@@ -119,18 +140,40 @@ bool DatabaseManager::initialize()
 
 bool DatabaseManager::initialize(const DatabaseConfig& config)
 {
-    const QString targetIdentity = databaseIdentity(config);
-    if (m_initialized && m_driverName == config.driverName && m_databasePath == targetIdentity && m_db.isOpen()) {
+    DatabaseConfig effectiveConfig = config;
+    effectiveConfig.driverName = DatabaseConfigLoader::normalizeDriverName(effectiveConfig.driverName);
+    if (isSqliteDriver(effectiveConfig.driverName) && effectiveConfig.databaseName.trimmed().isEmpty()) {
+        effectiveConfig.databaseName = DatabaseConfigLoader::defaultSqliteDatabasePath();
+    }
+
+    const QString targetIdentity = databaseIdentity(effectiveConfig);
+    if (m_initialized
+        && m_driverName == effectiveConfig.driverName
+        && m_databasePath == targetIdentity
+        && m_db.isOpen()) {
         return true;
     }
 
     m_initialized = false;
-    if (!openDatabase(config)) {
-        return false;
+    if (!openDatabase(effectiveConfig)) {
+        if (!isMysqlDriver(effectiveConfig.driverName)) {
+            return false;
+        }
+
+        const QString mysqlError = m_lastError;
+        const DatabaseConfig sqliteConfig = fallbackSqliteConfig();
+        qWarning() << "MySQL initialization failed, falling back to SQLite:" << mysqlError;
+        if (!openDatabase(sqliteConfig)) {
+            setLastError(QStringLiteral("failed to open MySQL database: %1; SQLite fallback failed: %2")
+                             .arg(mysqlError, m_lastError));
+            return false;
+        }
     }
 
-    QSqlQuery charset(m_db);
-    charset.exec(QStringLiteral("SET NAMES utf8mb4"));
+    if (isMysqlDriver(m_db.driverName())) {
+        QSqlQuery charset(m_db);
+        charset.exec(QStringLiteral("SET NAMES utf8mb4"));
+    }
 
     if (!runMigrations()) {
         m_initialized = false;
@@ -174,15 +217,21 @@ QString DatabaseManager::lastError() const
 
 bool DatabaseManager::openDatabase(const DatabaseConfig& config)
 {
-    if (!isMysqlDriver(config.driverName)) {
-        setLastError(QStringLiteral("unsupported database driver: %1. This project requires QMYSQL direct connection.")
-                         .arg(config.driverName));
+    DatabaseConfig effectiveConfig = config;
+    effectiveConfig.driverName = DatabaseConfigLoader::normalizeDriverName(effectiveConfig.driverName);
+    if (isSqliteDriver(effectiveConfig.driverName) && effectiveConfig.databaseName.trimmed().isEmpty()) {
+        effectiveConfig.databaseName = DatabaseConfigLoader::defaultSqliteDatabasePath();
+    }
+
+    if (!isMysqlDriver(effectiveConfig.driverName) && !isSqliteDriver(effectiveConfig.driverName)) {
+        setLastError(QStringLiteral("unsupported database driver: %1. Supported drivers: QMYSQL, QSQLITE.")
+                         .arg(effectiveConfig.driverName));
         return false;
     }
 
-    if (!QSqlDatabase::isDriverAvailable(config.driverName)) {
+    if (!QSqlDatabase::isDriverAvailable(effectiveConfig.driverName)) {
         setLastError(QStringLiteral("%1 driver is not available. Available drivers: %2")
-                         .arg(config.driverName, availableDriversText()));
+                         .arg(effectiveConfig.driverName, availableDriversText()));
         return false;
     }
 
@@ -199,29 +248,38 @@ bool DatabaseManager::openDatabase(const DatabaseConfig& config)
         QSqlDatabase::removeDatabase(m_connectionName);
     }
 
-    m_db = QSqlDatabase::addDatabase(config.driverName, m_connectionName);
+    m_db = QSqlDatabase::addDatabase(effectiveConfig.driverName, m_connectionName);
 
-    if (config.driverName == QStringLiteral("QMYSQL")) {
-        m_db.setHostName(config.hostName);
-        m_db.setPort(config.port);
-        m_db.setUserName(config.userName);
-        m_db.setPassword(config.password);
-        m_db.setDatabaseName(config.databaseName);
-        if (!config.connectOptions.trimmed().isEmpty()) {
-            m_db.setConnectOptions(config.connectOptions);
+    if (effectiveConfig.driverName == QStringLiteral("QMYSQL")) {
+        m_db.setHostName(effectiveConfig.hostName);
+        m_db.setPort(effectiveConfig.port);
+        m_db.setUserName(effectiveConfig.userName);
+        m_db.setPassword(effectiveConfig.password);
+        m_db.setDatabaseName(effectiveConfig.databaseName);
+        if (!effectiveConfig.connectOptions.trimmed().isEmpty()) {
+            m_db.setConnectOptions(effectiveConfig.connectOptions);
         }
     } else {
-        setLastError(QStringLiteral("unsupported database driver: %1").arg(config.driverName));
-        return false;
+        const QString sqlitePath = effectiveConfig.databaseName;
+        if (sqlitePath != QStringLiteral(":memory:")) {
+            const QFileInfo databaseFile(sqlitePath);
+            QDir directory(databaseFile.absolutePath());
+            if (!directory.exists() && !directory.mkpath(QStringLiteral("."))) {
+                setLastError(QStringLiteral("failed to create SQLite database directory: %1")
+                                 .arg(databaseFile.absolutePath()));
+                return false;
+            }
+        }
+        m_db.setDatabaseName(sqlitePath);
     }
 
     if (!m_db.open()) {
         const QString firstOpenError = m_db.lastError().text();
-        if (config.driverName == QStringLiteral("QMYSQL") && config.createDatabase) {
+        if (effectiveConfig.driverName == QStringLiteral("QMYSQL") && effectiveConfig.createDatabase) {
             QString createError;
-            if (ensureMysqlDatabaseExists(config, &createError) && m_db.open()) {
-                m_driverName = config.driverName;
-                m_databasePath = databaseIdentity(config);
+            if (ensureMysqlDatabaseExists(effectiveConfig, &createError) && m_db.open()) {
+                m_driverName = effectiveConfig.driverName;
+                m_databasePath = databaseIdentity(effectiveConfig);
                 m_lastError.clear();
                 return true;
             }
@@ -235,8 +293,8 @@ bool DatabaseManager::openDatabase(const DatabaseConfig& config)
         return false;
     }
 
-    m_driverName = config.driverName;
-    m_databasePath = databaseIdentity(config);
+    m_driverName = effectiveConfig.driverName;
+    m_databasePath = databaseIdentity(effectiveConfig);
     return true;
 }
 

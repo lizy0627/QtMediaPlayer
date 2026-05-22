@@ -20,6 +20,36 @@ void emitSearchFailure(OnlineMusicService* service, const ServiceError& error)
     emit service->searchFailed(error);
     emit service->searchError(error.message);
 }
+
+QString musicResolveNetworkMessage(const NetworkResult& result)
+{
+    const QString detail = result.errorMessage.trimmed().isEmpty()
+        ? QStringLiteral("\u7b2c\u4e09\u65b9\u97f3\u4e50\u63a5\u53e3\u8bf7\u6c42\u5931\u8d25\u3002")
+        : result.errorMessage.trimmed();
+
+    if (result.timedOut) {
+        return QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u89e3\u6790\u5728\u7ebf\u6b4c\u66f2\u64ad\u653e\u5730\u5740\u8d85\u65f6\u3002\n%1").arg(detail);
+    }
+    if (result.networkErrorCode != 0) {
+        return QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u65e0\u6cd5\u8bbf\u95ee\u7b2c\u4e09\u65b9\u97f3\u4e50\u63a5\u53e3\u3002\n%1").arg(detail);
+    }
+    if (result.httpStatus >= 400) {
+        return QStringLiteral("\u8d44\u6e90\u9519\u8bef\uff1a\u7b2c\u4e09\u65b9\u97f3\u4e50\u63a5\u53e3\u62d2\u7edd\u8bf7\u6c42\u6216\u8fd4\u56de HTTP %1\u3002\n%2")
+            .arg(result.httpStatus)
+            .arg(detail);
+    }
+    return QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25\uff1a%1").arg(detail);
+}
+
+QString invalidMusicDirectUrlMessage(const QString& detail = QString())
+{
+    QString message = QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u672a\u8fd4\u56de\u53ef\u64ad\u653e\u7684 http/https \u97f3\u9891\u76f4\u94fe\uff0c\u53ef\u80fd\u662f\u7248\u6743\u9650\u5236\u3001\u5730\u5740\u8fc7\u671f\u6216\u9700\u8981\u5e73\u53f0\u767b\u5f55\u3002");
+    const QString trimmedDetail = detail.trimmed();
+    if (!trimmedDetail.isEmpty()) {
+        message += QLatin1Char('\n') + trimmedDetail;
+    }
+    return message;
+}
 }
 
 OnlineMusicService::OnlineMusicService(QObject* parent)
@@ -109,7 +139,8 @@ void OnlineMusicService::resolveSongUrlAsync(const QString& songId)
 {
     const QString trimmedSongId = songId.trimmed();
     if (trimmedSongId.isEmpty()) {
-        emit resolveError(trimmedSongId, QStringLiteral("播放地址不可用"));
+        emit resolveError(trimmedSongId,
+                          QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25\uff1a\u7f3a\u5c11\u7b2c\u4e09\u65b9\u6b4c\u66f2 ID\u3002"));
         return;
     }
 
@@ -136,7 +167,7 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
         const QString songId = m_pendingResolveRequestIds.take(requestId);
 
         if (!result.ok()) {
-            emit resolveError(songId, QStringLiteral("播放地址不可用"));
+            emit resolveError(songId, musicResolveNetworkMessage(result));
             return;
         }
 
@@ -146,7 +177,7 @@ void OnlineMusicService::onRequestFinished(const QString& requestId, const Netwo
         if (!parseOk || song.url.trimmed().isEmpty()) {
             emit resolveError(songId,
                               statusMessage.isEmpty()
-                                  ? QStringLiteral("播放地址不可用")
+                                  ? invalidMusicDirectUrlMessage()
                                   : statusMessage);
             return;
         }
@@ -239,9 +270,11 @@ QList<SongInfo> OnlineMusicService::parseSearchResults(const QByteArray& data,
     const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
     if (doc.isNull() || !doc.isObject()) {
         if (statusMessage) {
-            *statusMessage = parseError.error == QJsonParseError::NoError
-                ? QStringLiteral("解析搜索结果失败。")
-                : QStringLiteral("解析搜索结果失败：%1。").arg(parseError.errorString());
+            const QString parseDetail = parseError.error == QJsonParseError::NoError
+                ? QStringLiteral("\u54cd\u5e94\u4f53\u4e0d\u662f JSON \u5bf9\u8c61\u3002")
+                : parseError.errorString();
+            *statusMessage = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1a\u7b2c\u4e09\u65b9\u97f3\u4e50\u63a5\u53e3\u8fd4\u56de\u7684\u4e0d\u662f\u53ef\u89e3\u6790\u7684 JSON\u3002\n%1")
+                                 .arg(parseDetail);
         }
         return resultSongs;
     }
@@ -310,7 +343,8 @@ SongInfo OnlineMusicService::parseResolvedSongUrl(const QByteArray& data,
     const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
     if (doc.isNull() || !doc.isObject()) {
         if (statusMessage) {
-            *statusMessage = QStringLiteral("播放地址不可用");
+            *statusMessage = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1a\u7b2c\u4e09\u65b9\u97f3\u4e50\u63a5\u53e3\u8fd4\u56de\u7684\u4e0d\u662f\u53ef\u89e3\u6790\u7684 JSON\u3002");
+            return SongInfo();
         }
         return SongInfo();
     }
@@ -318,7 +352,8 @@ SongInfo OnlineMusicService::parseResolvedSongUrl(const QByteArray& data,
     const QJsonArray dataArray = doc.object().value(QStringLiteral("data")).toArray();
     if (dataArray.isEmpty()) {
         if (statusMessage) {
-            *statusMessage = QStringLiteral("播放地址不可用");
+            *statusMessage = invalidMusicDirectUrlMessage(QStringLiteral("\u63a5\u53e3\u54cd\u5e94\u4e2d\u6ca1\u6709 data \u64ad\u653e\u6570\u636e\u3002"));
+            return SongInfo();
         }
         return SongInfo();
     }
@@ -331,7 +366,8 @@ SongInfo OnlineMusicService::parseResolvedSongUrl(const QByteArray& data,
         || (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https"))
         || url.host().isEmpty()) {
         if (statusMessage) {
-            *statusMessage = QStringLiteral("播放地址不可用");
+            *statusMessage = invalidMusicDirectUrlMessage(resolvedUrl);
+            return SongInfo();
         }
         return SongInfo();
     }
