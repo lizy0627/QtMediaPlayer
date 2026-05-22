@@ -70,6 +70,13 @@ void VideoPlayerWidget::open(const QString& filePath, bool localFile)
     }
 }
 
+void VideoPlayerWidget::openQueue(const QStringList& filePaths)
+{
+    if (m_controller) {
+        m_controller->openQueue(filePaths);
+    }
+}
+
 void VideoPlayerWidget::openAtPosition(const QString& filePath, qint64 position)
 {
     if (m_controller) {

@@ -51,6 +51,7 @@ SOURCES += \
     captureservice.cpp \
     framecaptureservice.cpp \
     databaseconfigloader.cpp \
+    localplaybackdiagnostics.cpp \
     videocapture.cpp \
     videocapturecoordinator.cpp \
     databasecontext.cpp \
@@ -134,6 +135,7 @@ HEADERS += \
     dbmanager.h \
     logindialog.h \
     lyricdownloader.h \
+    localplaybackdiagnostics.h \
     network/lyricdownloadservice.h \
     lyricpanel.h \
     lyricparser.h \

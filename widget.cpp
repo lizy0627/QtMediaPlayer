@@ -67,6 +67,12 @@ Widget::Widget(const AppStartupState& startupState, QWidget *parent)
                                             m_audio,
                                             m_historyService,
                                             this);
+    connect(m_controller,
+            &MainWindowController::localMediaProbeNoticeRequested,
+            this,
+            [this](const QString& message) {
+                showStartupStatus(message);
+            });
 
     if (!m_startupState.databaseAvailable) {
         showStartupStatus(QStringLiteral("数据库不可用，登录/历史/弹幕功能可能无法使用"));

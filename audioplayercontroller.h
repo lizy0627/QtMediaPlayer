@@ -81,6 +81,7 @@ private:
     qint64 m_pendingSeekPosition = -1;
     int m_pendingResolveIndex = -1;
     QString m_pendingResolveSourceId;
+    bool m_forceReloadResolvedOnlineTrack = false;
 };
 
 #endif // AUDIOPLAYERCONTROLLER_H

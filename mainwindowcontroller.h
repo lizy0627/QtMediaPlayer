@@ -41,6 +41,9 @@ public:
     void playAudioFromHistory(const QString& filePath);
     void playVideoFromHistory(const QString& filePath, qint64 position);
 
+signals:
+    void localMediaProbeNoticeRequested(QString message);
+
 private:
     QStringList videoExtensions() const;
     QStringList audioExtensions() const;

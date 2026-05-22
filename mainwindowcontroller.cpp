@@ -1,6 +1,7 @@
 #include "mainwindowcontroller.h"
 
 #include "audioplayer.h"
+#include "localplaybackdiagnostics.h"
 #include "mediafileprobe.h"
 #include "mediaplaybackrouter.h"
 #include "mediahistory.h"
@@ -46,6 +47,7 @@ MainWindowController::~MainWindowController()
         disconnect(m_probeWatcher, nullptr, this, nullptr);
         if (m_probeWatcher->isRunning()) {
             m_probeWatcher->cancel();
+            m_probeWatcher->waitForFinished();
         }
     }
 
@@ -170,16 +172,30 @@ void MainWindowController::handleLocalMediaProbeFinished()
         }
     }
 
+    const int acceptedLocalFileCount = videoFiles.size() + audioFiles.size();
+    if (acceptedLocalFileCount > 0) {
+        emit localMediaProbeNoticeRequested(
+            LocalPlaybackDiagnostics::quickProbeStatusMessage(acceptedLocalFileCount));
+    }
+
     if (!videoFiles.isEmpty() && m_videoPlayer) {
         showVideoPage();
-        m_videoPlayer->open(videoFiles.first());
 
-        if (videoFiles.size() > 1) {
-            QStringList ignoredVideoNames;
-            ignoredVideoNames.reserve(videoFiles.size() - 1);
+        if (videoFiles.size() == 1) {
+            m_videoPlayer->open(videoFiles.first());
+        } else {
+            m_videoPlayer->openQueue(videoFiles);
+
+            const QFileInfo firstVideoInfo(videoFiles.first());
+            const QString firstVideoName = firstVideoInfo.fileName().isEmpty()
+                ? videoFiles.first()
+                : firstVideoInfo.fileName();
+
+            QStringList queuedVideoNames;
+            queuedVideoNames.reserve(videoFiles.size() - 1);
             for (int i = 1; i < videoFiles.size(); ++i) {
                 const QFileInfo fileInfo(videoFiles.at(i));
-                ignoredVideoNames.append(fileInfo.fileName().isEmpty()
+                queuedVideoNames.append(fileInfo.fileName().isEmpty()
                                              ? videoFiles.at(i)
                                              : fileInfo.fileName());
             }
@@ -187,8 +203,10 @@ void MainWindowController::handleLocalMediaProbeFinished()
             QMessageBox::information(
                 dialogParent,
                 QStringLiteral("\u89c6\u9891\u961f\u5217\u63d0\u793a"),
-                QStringLiteral("\u5f53\u524d\u53ea\u652f\u6301\u64ad\u653e\u7b2c\u4e00\u4e2a\u89c6\u9891\uff0c\u5176\u4f59\u89c6\u9891\u6682\u672a\u52a0\u5165\u961f\u5217\uff1a\n%1")
-                    .arg(ignoredVideoNames.join(QStringLiteral("\n"))));
+                QStringLiteral("\u5df2\u5c06 %1 \u4e2a\u89c6\u9891\u52a0\u5165\u961f\u5217\uff0c\u6b63\u5728\u64ad\u653e\u7b2c\u4e00\u4e2a\uff1a\n%2\n\n"
+                               "\u540e\u7eed\u89c6\u9891\u5c06\u6309\u9009\u62e9\u987a\u5e8f\u81ea\u52a8\u64ad\u653e\uff1a\n%3")
+                    .arg(videoFiles.size())
+                    .arg(firstVideoName, queuedVideoNames.join(QStringLiteral("\n"))));
         }
     }
 

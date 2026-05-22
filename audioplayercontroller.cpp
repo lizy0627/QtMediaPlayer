@@ -10,6 +10,7 @@
 
 #include "audioplaybackcontroller.h"
 #include "audiotrack.h"
+#include "localplaybackdiagnostics.h"
 #include "lyricservice.h"
 #include "mediahistory.h"
 #include "mediaprobeservice.h"
@@ -68,6 +69,20 @@ QString invalidOnlineAudioUrlMessage(const QString& detail = QString())
     return message;
 }
 
+QString onlineAudioRetryHint()
+{
+    return QStringLiteral("\n\n\u63d0\u793a\uff1a\u53ef\u518d\u6b21\u70b9\u51fb\u64ad\u653e\u6216\u53cc\u51fb\u5f53\u524d\u6b4c\u66f2\u624b\u52a8\u91cd\u65b0\u89e3\u6790\uff1b\u5982\u679c\u4ecd\u7136\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u540e\u64ad\u653e\u3002");
+}
+
+QString withOnlineAudioRetryHint(const QString& message)
+{
+    const QString trimmedMessage = message.trimmed();
+    if (trimmedMessage.contains(QStringLiteral("\u624b\u52a8\u91cd\u65b0\u89e3\u6790"))) {
+        return trimmedMessage;
+    }
+    return trimmedMessage + onlineAudioRetryHint();
+}
+
 QString playbackErrorMessage(QMediaPlayer::Error error, const QString& errorString)
 {
     QString message;
@@ -103,12 +118,26 @@ QString localPlaybackFailureHint()
                           "如果播放失败，可能是文件损坏、编码不受支持，或系统缺少对应解码器。");
 }
 
-QString localPlaybackErrorMessage(QMediaPlayer::Error error, const QString& errorString)
+[[maybe_unused]] QString localPlaybackErrorMessage(QMediaPlayer::Error error, const QString& errorString)
 {
     return playbackErrorMessage(error, errorString) + localPlaybackFailureHint();
 }
 
-QString quickProbeNotice()
+QString localPlaybackErrorTitle(const QString& filePath,
+                                QMediaPlayer::Error error,
+                                const QString& errorString)
+{
+    return LocalPlaybackDiagnostics::diagnose(filePath, error, errorString).title;
+}
+
+QString localPlaybackErrorMessage(const QString& filePath,
+                                  QMediaPlayer::Error error,
+                                  const QString& errorString)
+{
+    return LocalPlaybackDiagnostics::diagnose(filePath, error, errorString).message;
+}
+
+[[maybe_unused]] QString quickProbeNotice()
 {
     return QStringLiteral("\n\n说明：本地文件选择阶段仅检查文件是否存在、可读、非空以及扩展名是否在支持列表中；"
                           "扩展名支持不代表编码一定可播放。");
@@ -124,7 +153,7 @@ QString mediaProbeWarningMessage(const QStringList& failedFiles)
         .arg(reasonText,
              MediaProbeService::supportedAudioFormats().join(QStringLiteral(", ")),
              MediaProbeService::supportedVideoFormats().join(QStringLiteral(", ")),
-             quickProbeNotice());
+             LocalPlaybackDiagnostics::quickProbeNotice());
 }
 
 QString mediaProbeWarningMessage(const ProbeResult& result)
@@ -358,6 +387,7 @@ bool AudioPlayerController::removeTrackAt(int index)
 void AudioPlayerController::clearPlaylist()
 {
     clearPendingSeek();
+    m_forceReloadResolvedOnlineTrack = false;
     m_playbackController->stop();
     m_playlistModel->clear();
     syncLyricsForCurrentTrack();
@@ -385,14 +415,16 @@ void AudioPlayerController::play()
             return;
         }
     } else if (!isPlayableRemoteUrl(track.url)) {
-        const QString message = invalidOnlineAudioUrlMessage(track.url.toString());
+        const QString message = withOnlineAudioRetryHint(invalidOnlineAudioUrlMessage(track.url.toString()));
         markCurrentTrackFailed(message);
         emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"), message);
         return;
     }
 
     QMediaPlayer* player = m_playbackController->player();
-    if (player->source() != track.url) {
+    const bool forceReload = m_forceReloadResolvedOnlineTrack && !track.isLocal;
+    if (player->source() != track.url || forceReload) {
+        m_forceReloadResolvedOnlineTrack = false;
         m_playlistModel->updateCurrentTrackPlaybackStatus(
             AudioTrackPlaybackStatus::Loading,
             track.isLocal
@@ -429,6 +461,7 @@ void AudioPlayerController::togglePlayback()
 void AudioPlayerController::playAt(int index)
 {
     clearPendingSeek();
+    m_forceReloadResolvedOnlineTrack = false;
     m_playlistModel->setCurrentIndex(index);
     play();
 }
@@ -437,6 +470,7 @@ void AudioPlayerController::playPrevious()
 {
     if (m_playlistModel->moveToPrevious()) {
         clearPendingSeek();
+        m_forceReloadResolvedOnlineTrack = false;
         play();
     }
 }
@@ -445,6 +479,7 @@ void AudioPlayerController::playNext()
 {
     if (m_playlistModel->moveToNext()) {
         clearPendingSeek();
+        m_forceReloadResolvedOnlineTrack = false;
         play();
     }
 }
@@ -483,15 +518,20 @@ void AudioPlayerController::handleMediaStatusChanged(int status)
         const bool isOnlineTrack = m_playlistModel
             && m_playlistModel->hasCurrent()
             && !m_playlistModel->currentTrack().isLocal;
-        const QString message = isOnlineTrack
-            ? invalidOnlineAudioUrlMessage(QStringLiteral("\u64ad\u653e\u5668\u62a5\u544a\u5a92\u4f53\u65e0\u6548\uff0c\u8be5\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002"))
-            : QStringLiteral("\u5a92\u4f53\u65e0\u6548\uff1a\u65e0\u6cd5\u52a0\u8f7d\u6216\u64ad\u653e\u5f53\u524d\u97f3\u9891\u3002")
-                  + localPlaybackFailureHint();
+
+        if (!isOnlineTrack && m_playlistModel && m_playlistModel->hasCurrent()) {
+            const QString filePath = m_playlistModel->currentTrack().url.toLocalFile();
+            const LocalPlaybackDiagnosis diagnosis =
+                LocalPlaybackDiagnostics::diagnose(filePath, QMediaPlayer::FormatError, QString());
+            markCurrentTrackFailed(diagnosis.message);
+            emit warningRequested(diagnosis.title, diagnosis.message);
+            return;
+        }
+
+    const QString message =
+            withOnlineAudioRetryHint(invalidOnlineAudioUrlMessage(QStringLiteral("\u64ad\u653e\u5668\u62a5\u544a\u5a92\u4f53\u65e0\u6548\uff0c\u8be5\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002")));
         markCurrentTrackFailed(message);
-        emit warningRequested(isOnlineTrack
-                                  ? QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548")
-                                  : QStringLiteral("\u683c\u5f0f\u9519\u8bef"),
-                              message);
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"), message);
         return;
     }
 }
@@ -519,14 +559,22 @@ void AudioPlayerController::handlePlayerError(int error, const QString& errorStr
         if (!errorString.trimmed().isEmpty()) {
             message += QLatin1Char('\n') + errorString.trimmed();
         }
+        message = withOnlineAudioRetryHint(message);
         markCurrentTrackFailed(message);
         emit warningRequested(playbackErrorCategory(mediaError), message);
         return;
     }
 
-    const QString message = hasCurrentTrack && m_playlistModel->currentTrack().isLocal
-        ? localPlaybackErrorMessage(mediaError, errorString)
-        : playbackErrorMessage(mediaError, errorString);
+    if (hasCurrentTrack && m_playlistModel->currentTrack().isLocal) {
+        const QString filePath = m_playlistModel->currentTrack().url.toLocalFile();
+        const QString title = localPlaybackErrorTitle(filePath, mediaError, errorString);
+        const QString message = localPlaybackErrorMessage(filePath, mediaError, errorString);
+        markCurrentTrackFailed(message);
+        emit warningRequested(title, message);
+        return;
+    }
+
+    const QString message = playbackErrorMessage(mediaError, errorString);
     markCurrentTrackFailed(message);
     emit warningRequested(playbackErrorCategory(mediaError), message);
 }
@@ -679,7 +727,8 @@ bool AudioPlayerController::currentTrackNeedsOnlineResolve(const AudioTrack& tra
 
     return track.url.isEmpty()
         || !track.url.isValid()
-        || track.playbackStatus == AudioTrackPlaybackStatus::PendingValidation;
+        || track.playbackStatus == AudioTrackPlaybackStatus::PendingValidation
+        || track.playbackStatus == AudioTrackPlaybackStatus::Failed;
 }
 
 void AudioPlayerController::resolveCurrentOnlineTrack()
@@ -698,6 +747,11 @@ void AudioPlayerController::resolveCurrentOnlineTrack()
             : QStringLiteral("\u65e0\u6cd5\u89e3\u6790\u5728\u7ebf\u6b4c\u66f2\uff1a\u5728\u7ebf\u97f3\u4e50\u670d\u52a1\u672a\u521d\u59cb\u5316\u3002");
         markCurrentTrackFailed(message);
         emit warningRequested(QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25"), message);
+        return;
+    }
+
+    if (m_pendingResolveIndex == m_playlistModel->currentIndex()
+        && m_pendingResolveSourceId == sourceId) {
         return;
     }
 
@@ -832,6 +886,7 @@ void AudioPlayerController::onOnlineSongUrlResolved(const SongInfo& song)
     m_pendingResolveSourceId.clear();
 
     if (isCurrentTrack) {
+        m_forceReloadResolvedOnlineTrack = true;
         play();
     }
 }
@@ -843,9 +898,9 @@ void AudioPlayerController::onOnlineSongUrlResolveError(const QString& songId, c
     }
 
     const QString sourceId = songId.trimmed();
-    const QString failureMessage = message.trimmed().isEmpty()
+    const QString failureMessage = withOnlineAudioRetryHint(message.trimmed().isEmpty()
         ? QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u672a\u8fd4\u56de\u53ef\u64ad\u653e\u7684\u97f3\u9891\u76f4\u94fe\u3002")
-        : message.trimmed();
+        : message.trimmed());
 
     int index = -1;
     if (sourceId == m_pendingResolveSourceId
@@ -872,6 +927,7 @@ void AudioPlayerController::onOnlineSongUrlResolveError(const QString& songId, c
         m_pendingResolveIndex = -1;
         m_pendingResolveSourceId.clear();
     }
+    m_forceReloadResolvedOnlineTrack = false;
 }
 
 void AudioPlayerController::markCurrentTrackPlaybackStarted()

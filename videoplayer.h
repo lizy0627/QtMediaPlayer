@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 class AiChatPanel;
 class AiChatWidget;
@@ -43,6 +44,7 @@ public:
     ~VideoPlayerWidget() override;
 
     void open(const QString& filePath, bool localFile = true);
+    void openQueue(const QStringList& filePaths);
     void openAtPosition(const QString& filePath, qint64 position);
     void toggle();
     void jump(bool forward, int ms = 5000);

@@ -18,6 +18,9 @@ public:
 
     void showSearchDialog(QWidget* parent);
     void playOnlineVideo(const VideoInfo& video);
+    bool retryCurrentVideo();
+    bool hasCurrentVideo() const;
+    bool isResolving() const;
     QString playbackStartedMessage(const OnlinePlaybackRequest& request) const;
 
 signals:
@@ -25,7 +28,12 @@ signals:
     void playbackResolveFailed(QString message);
 
 private:
+    void resolveVideo(const VideoInfo& video);
+
     OnlineVideoService* m_onlineVideoService = nullptr;
+    VideoInfo m_currentVideo;
+    bool m_hasCurrentVideo = false;
+    bool m_resolving = false;
 };
 
 #endif // ONLINEVIDEOCOORDINATOR_H

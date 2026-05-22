@@ -3,6 +3,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "localplaybackdiagnostics.h"
 #include "mediahistory.h"
 #include "mediaprobeservice.h"
 #include "onlinevideocoordinator.h"
@@ -72,6 +73,20 @@ QString invalidOnlineVideoUrlMessage(const OnlinePlaybackRequest& request, const
     return message;
 }
 
+QString onlineVideoRetryHint()
+{
+    return QStringLiteral("\n\n\u63d0\u793a\uff1a\u53ef\u518d\u6b21\u70b9\u51fb\u64ad\u653e\u6309\u94ae\u624b\u52a8\u91cd\u65b0\u89e3\u6790\u5f53\u524d\u89c6\u9891\uff1b\u5982\u679c\u4ecd\u7136\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u6216\u5728\u6d4f\u89c8\u5668\u4e2d\u6253\u5f00\u3002");
+}
+
+QString withOnlineVideoRetryHint(const QString& message)
+{
+    const QString trimmedMessage = message.trimmed();
+    if (trimmedMessage.contains(QStringLiteral("\u624b\u52a8\u91cd\u65b0\u89e3\u6790"))) {
+        return trimmedMessage;
+    }
+    return trimmedMessage + onlineVideoRetryHint();
+}
+
 QString playerErrorTitle(QMediaPlayer::Error error)
 {
     switch (error) {
@@ -128,7 +143,7 @@ QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString
     return message;
 }
 
-QString quickProbeNotice()
+[[maybe_unused]] QString quickProbeNotice()
 {
     return QStringLiteral("\n\n说明：本地文件选择阶段仅检查文件是否存在、可读、非空以及扩展名是否在支持列表中；"
                           "扩展名支持不代表编码一定可播放。");
@@ -143,7 +158,7 @@ QString mediaProbeWarningMessage(const ProbeResult& result)
         .arg(result.reason,
              result.supportedAudioFormats.join(QStringLiteral(", ")),
              result.supportedVideoFormats.join(QStringLiteral(", ")),
-             quickProbeNotice());
+             LocalPlaybackDiagnostics::quickProbeNotice());
 }
 }
 
@@ -258,6 +273,10 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
         return false;
     }
 
+    if (!m_openingVideoQueueItem) {
+        clearVideoQueue();
+    }
+
     if (localFile) {
         const ProbeResult probeResult = MediaProbeService::probeLocalFile(filePath);
         if (probeResult.status != ProbeStatus::Supported) {
@@ -276,6 +295,7 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
     saveCurrentProgress();
 
     if (localFile) {
+        m_currentOnlinePlaybackFailed = false;
         m_currentVideoPath = filePath;
         if (m_historyCoordinator) {
             m_historyCoordinator->setCurrentVideo(filePath);
@@ -294,12 +314,33 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
             m_danmakuCoordinator->loadVideo(filePath);
         }
     } else {
+        m_currentOnlinePlaybackFailed = false;
         clearLocalVideoStateForOnlinePlayback();
         m_playbackController->openUrl(QUrl(filePath));
     }
 
     m_playbackController->play();
     return true;
+}
+
+bool VideoPlayerController::openQueue(const QStringList& filePaths)
+{
+    QStringList queue;
+    queue.reserve(filePaths.size());
+    for (const QString& filePath : filePaths) {
+        const QString trimmedPath = filePath.trimmed();
+        if (!trimmedPath.isEmpty()) {
+            queue.append(trimmedPath);
+        }
+    }
+
+    if (queue.isEmpty()) {
+        return false;
+    }
+
+    m_videoQueue = queue;
+    m_videoQueueIndex = 0;
+    return openQueuedVideo(m_videoQueueIndex);
 }
 
 void VideoPlayerController::openAtPosition(const QString& filePath, qint64 position)
@@ -319,8 +360,14 @@ void VideoPlayerController::openAtPosition(const QString& filePath, qint64 posit
 
 void VideoPlayerController::togglePlayback()
 {
-    if (m_playbackController) {
-        m_playbackController->toggle();
+    if (!m_playbackController) {
+        return;
+    }
+
+    if (m_playbackController->isPlaying()) {
+        m_playbackController->pause();
+    } else {
+        play();
     }
 }
 
@@ -338,11 +385,17 @@ void VideoPlayerController::seekToPosition(qint64 positionValue)
         return;
     }
 
-    player->setPosition(positionValue);
-    emit positionChanged(positionValue);
+    qint64 boundedPosition = qMax<qint64>(0, positionValue);
+    const qint64 durationValue = player->duration();
+    if (durationValue > 0) {
+        boundedPosition = qBound<qint64>(0, boundedPosition, durationValue);
+    }
+
+    player->setPosition(boundedPosition);
+    emit positionChanged(boundedPosition);
 
     if (m_danmakuCoordinator) {
-        m_danmakuCoordinator->syncAfterSeek(positionValue);
+        m_danmakuCoordinator->syncAfterSeek(boundedPosition);
     }
 }
 
@@ -390,9 +443,21 @@ void VideoPlayerController::pause()
 
 void VideoPlayerController::play()
 {
-    if (m_playbackController) {
-        m_playbackController->play();
+    if (!m_playbackController) {
+        return;
     }
+
+    if (m_onlineCoordinator
+        && m_onlineCoordinator->isResolving()
+        && m_currentVideoPath.trimmed().isEmpty()) {
+        return;
+    }
+
+    if (retryCurrentOnlineVideoIfFailed()) {
+        return;
+    }
+
+    m_playbackController->play();
 }
 
 qint64 VideoPlayerController::position() const
@@ -464,6 +529,7 @@ void VideoPlayerController::sendDanmaku(const QString& content, const QString& c
 void VideoPlayerController::playOnlineVideo(const VideoInfo& video)
 {
     if (m_onlineCoordinator && m_playbackController) {
+        m_currentOnlinePlaybackFailed = false;
         m_onlineCoordinator->playOnlineVideo(video);
     }
 }
@@ -476,8 +542,9 @@ void VideoPlayerController::onOnlinePlaybackResolved(const OnlinePlaybackRequest
 
     if (request.resolution == PlaybackResolution::BrowserOnly) {
         m_playbackController->stop();
+        m_currentOnlinePlaybackFailed = true;
         emit warningRequested(QStringLiteral("\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u6253\u5f00"),
-                              browserOnlyMessage(request));
+                              withOnlineVideoRetryHint(browserOnlyMessage(request)));
         return;
     }
 
@@ -485,28 +552,31 @@ void VideoPlayerController::onOnlinePlaybackResolved(const OnlinePlaybackRequest
         || !request.valid
         || !request.mediaUrl.isValid()) {
         m_playbackController->stop();
+        m_currentOnlinePlaybackFailed = true;
         const QString detail = request.errorMessage.trimmed().isEmpty()
             ? QStringLiteral("\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002")
             : request.errorMessage.trimmed();
         emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
-                              invalidOnlineVideoUrlMessage(request, detail));
+                              withOnlineVideoRetryHint(invalidOnlineVideoUrlMessage(request, detail)));
         return;
     }
 
     if (!isPlayableRemoteUrl(request.mediaUrl)) {
         m_playbackController->stop();
+        m_currentOnlinePlaybackFailed = true;
         emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
-                              invalidOnlineVideoUrlMessage(
+                              withOnlineVideoRetryHint(invalidOnlineVideoUrlMessage(
                                   request,
-                                  QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u8fd4\u56de\u7684\u4e0d\u662f\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002")));
+                                  QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u7b2c\u4e09\u65b9\u63a5\u53e3\u8fd4\u56de\u7684\u4e0d\u662f\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002"))));
         return;
     }
 
     m_playbackController->stop();
+    m_currentOnlinePlaybackFailed = false;
     clearLocalVideoStateForOnlinePlayback();
     m_playbackController->openUrl(request.mediaUrl);
     m_playbackController->play();
-    emit infoRequested(QStringLiteral("开始播放"),
+    emit infoRequested(QStringLiteral("\u5f00\u59cb\u64ad\u653e"),
                        m_onlineCoordinator->playbackStartedMessage(request));
 }
 
@@ -515,10 +585,12 @@ void VideoPlayerController::onOnlinePlaybackResolveFailed(const QString& message
     if (m_playbackController) {
         m_playbackController->stop();
     }
+    m_currentOnlinePlaybackFailed = true;
+    const QString failureMessage = message.trimmed().isEmpty()
+        ? QStringLiteral("\u672a\u80fd\u89e3\u6790\u5728\u7ebf\u89c6\u9891\u64ad\u653e\u5730\u5740\u3002")
+        : message.trimmed();
     emit warningRequested(QStringLiteral("\u89e3\u6790\u64ad\u653e\u5730\u5740\u5931\u8d25"),
-                          message.trimmed().isEmpty()
-                              ? QStringLiteral("\u672a\u80fd\u89e3\u6790\u5728\u7ebf\u89c6\u9891\u64ad\u653e\u5730\u5740\u3002")
-                              : message.trimmed());
+                          withOnlineVideoRetryHint(failureMessage));
 }
 
 void VideoPlayerController::onPlaybackStateChanged(QMediaPlayer::PlaybackState state)
@@ -576,6 +648,9 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
             m_historyCoordinator->saveCompletedProgress(position(), duration());
             m_historyCoordinator->setCompletionSaved(true);
         }
+        if (playNextQueuedVideo()) {
+            return;
+        }
         return;
     }
 
@@ -584,14 +659,19 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
             m_playbackController->stop();
         }
         const bool localFile = !m_currentVideoPath.trimmed().isEmpty();
-        QString message = localFile
-            ? QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u6587\u4ef6\u4e0d\u53ef\u7528\u3002")
-                  + localPlaybackFailureHint()
-            : QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u5728\u7ebf\u64ad\u653e\u5730\u5740\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002");
-        emit warningRequested(localFile
-                                  ? QStringLiteral("\u683c\u5f0f\u9519\u8bef")
-                                  : QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
-                              message);
+        if (localFile) {
+            const LocalPlaybackDiagnosis diagnosis =
+                LocalPlaybackDiagnostics::diagnose(m_currentVideoPath, QMediaPlayer::FormatError, QString());
+            emit warningRequested(diagnosis.title, diagnosis.message);
+            if (playNextQueuedVideo()) {
+                return;
+            }
+            return;
+        }
+
+        m_currentOnlinePlaybackFailed = true;
+        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
+                              withOnlineVideoRetryHint(QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u5728\u7ebf\u64ad\u653e\u5730\u5740\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002")));
         return;
     }
 }
@@ -605,8 +685,23 @@ void VideoPlayerController::onPlayerError(QMediaPlayer::Error error, const QStri
     if (m_playbackController) {
         m_playbackController->stop();
     }
+
+    if (!m_currentVideoPath.trimmed().isEmpty()) {
+        const QString failedVideoPath = m_currentVideoPath;
+        const LocalPlaybackDiagnosis diagnosis =
+            LocalPlaybackDiagnostics::diagnose(failedVideoPath, error, errorString);
+        emit warningRequested(diagnosis.title, diagnosis.message);
+        QTimer::singleShot(0, this, [this, failedVideoPath]() {
+            if (m_currentVideoPath == failedVideoPath) {
+                playNextQueuedVideo();
+            }
+        });
+        return;
+    }
+
+    m_currentOnlinePlaybackFailed = true;
     emit warningRequested(playerErrorTitle(error),
-                          playerErrorMessage(error, errorString, !m_currentVideoPath.trimmed().isEmpty()));
+                          withOnlineVideoRetryHint(playerErrorMessage(error, errorString, false)));
 }
 
 void VideoPlayerController::saveCurrentProgress()
@@ -699,6 +794,7 @@ void VideoPlayerController::tryApplyPendingSeek(QMediaPlayer::MediaStatus status
 
 void VideoPlayerController::clearLocalVideoStateForOnlinePlayback()
 {
+    clearVideoQueue();
     m_currentVideoPath.clear();
     if (m_historyCoordinator) {
         m_historyCoordinator->clearCurrentVideo();
@@ -708,4 +804,72 @@ void VideoPlayerController::clearLocalVideoStateForOnlinePlayback()
     if (m_danmakuCoordinator) {
         m_danmakuCoordinator->clearVideo();
     }
+}
+
+void VideoPlayerController::clearVideoQueue()
+{
+    m_videoQueue.clear();
+    m_videoQueueIndex = -1;
+}
+
+bool VideoPlayerController::openQueuedVideo(int index)
+{
+    if (index < 0 || index >= m_videoQueue.size()) {
+        clearVideoQueue();
+        return false;
+    }
+
+    m_videoQueueIndex = index;
+    m_openingVideoQueueItem = true;
+    const bool previousSkipRestorePrompt = m_skipNextRestorePrompt;
+    if (index > 0) {
+        m_skipNextRestorePrompt = true;
+    }
+    const bool opened = open(m_videoQueue.at(index), true);
+    if (!opened) {
+        m_skipNextRestorePrompt = previousSkipRestorePrompt;
+    }
+    m_openingVideoQueueItem = false;
+
+    if (!opened) {
+        return playNextQueuedVideo();
+    }
+    return true;
+}
+
+bool VideoPlayerController::playNextQueuedVideo()
+{
+    if (m_videoQueueIndex < 0 || m_videoQueueIndex + 1 >= m_videoQueue.size()) {
+        clearVideoQueue();
+        return false;
+    }
+
+    return openQueuedVideo(m_videoQueueIndex + 1);
+}
+
+bool VideoPlayerController::retryCurrentOnlineVideoIfFailed()
+{
+    if (!m_currentOnlinePlaybackFailed
+        || !m_onlineCoordinator
+        || !m_onlineCoordinator->hasCurrentVideo()
+        || !m_currentVideoPath.trimmed().isEmpty()) {
+        return false;
+    }
+
+    if (m_onlineCoordinator->isResolving()) {
+        return true;
+    }
+
+    if (m_playbackController) {
+        m_playbackController->stop();
+    }
+    m_currentOnlinePlaybackFailed = false;
+    if (m_onlineCoordinator->retryCurrentVideo()) {
+        emit infoRequested(QStringLiteral("\u6b63\u5728\u91cd\u65b0\u89e3\u6790"),
+                           QStringLiteral("\u6b63\u5728\u91cd\u65b0\u89e3\u6790\u5f53\u524d\u5728\u7ebf\u89c6\u9891\u64ad\u653e\u5730\u5740\u3002"));
+        return true;
+    }
+
+    m_currentOnlinePlaybackFailed = true;
+    return false;
 }

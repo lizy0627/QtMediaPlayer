@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QMediaPlayer>
 #include <QString>
+#include <QStringList>
 
 #include "onlinevideotypes.h"
 
@@ -36,6 +37,7 @@ public:
                                    QObject* parent = nullptr);
 
     bool open(const QString& filePath, bool localFile = true);
+    bool openQueue(const QStringList& filePaths);
     void openAtPosition(const QString& filePath, qint64 position);
     void togglePlayback();
     void jump(bool forward, int ms = 5000);
@@ -96,6 +98,10 @@ private:
                              qint64 highlightPosition = -1);
     void tryApplyPendingSeek(QMediaPlayer::MediaStatus status);
     void clearLocalVideoStateForOnlinePlayback();
+    void clearVideoQueue();
+    bool openQueuedVideo(int index);
+    bool playNextQueuedVideo();
+    bool retryCurrentOnlineVideoIfFailed();
 
     VideoPlaybackController* m_playbackController = nullptr;
     VideoHistoryCoordinator* m_historyCoordinator = nullptr;
@@ -108,6 +114,10 @@ private:
     qint64 m_pendingSeekPosition = -1;
     qint64 m_pendingHighlightPosition = -1;
     PendingSeekMode m_pendingSeekMode = PendingSeekMode::None;
+    QStringList m_videoQueue;
+    int m_videoQueueIndex = -1;
+    bool m_openingVideoQueueItem = false;
+    bool m_currentOnlinePlaybackFailed = false;
 };
 
 #endif // VIDEOPLAYERCONTROLLER_H

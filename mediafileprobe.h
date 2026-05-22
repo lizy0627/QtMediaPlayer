@@ -11,10 +11,21 @@ enum class MediaRoute {
     Unsupported
 };
 
+enum class MediaProbeIssue {
+    None,
+    EmptyPath,
+    FileNotFound,
+    NotRegularFile,
+    NotReadable,
+    EmptyFile,
+    UnsupportedExtension
+};
+
 struct MediaProbeResult {
     bool supported = false;
     QString reason;
     MediaRoute route = MediaRoute::Unsupported;
+    MediaProbeIssue issue = MediaProbeIssue::None;
 };
 
 struct ProbedMediaFile {

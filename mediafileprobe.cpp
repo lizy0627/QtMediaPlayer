@@ -25,12 +25,16 @@ const char* const kVideoExtensions[] = {
     "wmv"
 };
 
-MediaProbeResult makeResult(bool supported, const QString& reason, MediaRoute route)
+MediaProbeResult makeResult(bool supported,
+                            const QString& reason,
+                            MediaRoute route,
+                            MediaProbeIssue issue = MediaProbeIssue::None)
 {
     MediaProbeResult result;
     result.supported = supported;
     result.reason = reason;
     result.route = route;
+    result.issue = issue;
     return result;
 }
 
@@ -59,28 +63,41 @@ MediaProbeResult MediaFileProbe::probe(const QString& filePath)
 {
     const QString normalizedPath = filePath.trimmed();
     if (normalizedPath.isEmpty()) {
-        return makeResult(false, QStringLiteral("\u6587\u4ef6\u8def\u5f84\u4e3a\u7a7a"), MediaRoute::Unsupported);
+        return makeResult(false,
+                          QStringLiteral("\u6587\u4ef6\u8def\u5f84\u4e3a\u7a7a"),
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::EmptyPath);
     }
 
     const QFileInfo fileInfo(normalizedPath);
     if (!fileInfo.exists()) {
-        return makeResult(false, QStringLiteral("\u6587\u4ef6\u4e0d\u5b58\u5728"), MediaRoute::Unsupported);
+        return makeResult(false,
+                          QStringLiteral("\u6587\u4ef6\u4e0d\u5b58\u5728"),
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::FileNotFound);
     }
 
     if (!fileInfo.isFile()) {
-        return makeResult(false, QStringLiteral("\u4e0d\u662f\u6709\u6548\u7684\u666e\u901a\u6587\u4ef6"), MediaRoute::Unsupported);
+        return makeResult(false,
+                          QStringLiteral("\u4e0d\u662f\u6709\u6548\u7684\u666e\u901a\u6587\u4ef6"),
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::NotRegularFile);
     }
 
     QFile file(fileInfo.absoluteFilePath());
     if (!file.open(QIODevice::ReadOnly)) {
         return makeResult(false,
                           QStringLiteral("\u6587\u4ef6\u4e0d\u53ef\u8bfb\uff0c\u53ef\u80fd\u6ca1\u6709\u8bbf\u95ee\u6743\u9650"),
-                          MediaRoute::Unsupported);
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::NotReadable);
     }
     file.close();
 
     if (fileInfo.size() == 0) {
-        return makeResult(false, QStringLiteral("\u6587\u4ef6\u4e3a\u7a7a\uff0c\u65e0\u6cd5\u64ad\u653e"), MediaRoute::Unsupported);
+        return makeResult(false,
+                          QStringLiteral("\u6587\u4ef6\u4e3a\u7a7a\uff0c\u65e0\u6cd5\u64ad\u653e"),
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::EmptyFile);
     }
 
     const QString suffix = fileInfo.suffix().toLower();
@@ -89,7 +106,8 @@ MediaProbeResult MediaFileProbe::probe(const QString& filePath)
         return makeResult(false,
                           QStringLiteral("\u5f53\u524d\u6587\u4ef6\u6269\u5c55\u540d\u4e0d\u5728\u652f\u6301\u5217\u8868\u4e2d\uff1a%1")
                               .arg(suffix),
-                          MediaRoute::Unsupported);
+                          MediaRoute::Unsupported,
+                          MediaProbeIssue::UnsupportedExtension);
     }
 
     return makeResult(true, QString(), route);

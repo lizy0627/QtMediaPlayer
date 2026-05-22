@@ -26,6 +26,9 @@ bool UserRepository::registerUser(const QString& username,
         setLastError(QStringLiteral("username already exists"));
         return false;
     }
+    if (!m_lastError.isEmpty()) {
+        return false;
+    }
 
     QSqlQuery query(m_dbContext.database());
     query.prepare(QStringLiteral(
@@ -77,7 +80,9 @@ bool UserRepository::userExists(const QString& username)
         return false;
     }
 
-    return query.next();
+    const bool exists = query.next();
+    m_lastError.clear();
+    return exists;
 }
 
 int UserRepository::getLoginCount(const QString& username)
