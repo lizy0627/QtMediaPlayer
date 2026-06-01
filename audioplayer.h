@@ -33,6 +33,7 @@ public:
     void addFiles(const QStringList& files);
     bool playFromHistory(const MediaHistoryRecord& record);
     void audioPause();
+    bool showMediaInfo();
 
 private:
     void createUI();

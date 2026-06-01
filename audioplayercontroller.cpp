@@ -71,7 +71,7 @@ QString invalidOnlineAudioUrlMessage(const QString& detail = QString())
 
 QString onlineAudioRetryHint()
 {
-    return QStringLiteral("\n\n\u63d0\u793a\uff1a\u53ef\u518d\u6b21\u70b9\u51fb\u64ad\u653e\u6216\u53cc\u51fb\u5f53\u524d\u6b4c\u66f2\u624b\u52a8\u91cd\u65b0\u89e3\u6790\uff1b\u5982\u679c\u4ecd\u7136\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u540e\u64ad\u653e\u3002");
+    return QStringLiteral("\n\n\u63d0\u793a\uff1a\u53ef\u5728\u64ad\u653e\u5217\u8868\u4e2d\u9009\u4e2d\u8be5\u6b4c\u66f2\uff0c\u70b9\u51fb\u201c\u91cd\u8bd5\u64ad\u653e\u201d\u624b\u52a8\u91cd\u65b0\u89e3\u6790\uff1b\u5982\u679c\u4ecd\u7136\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u641c\u7d22\u540e\u64ad\u653e\u3002");
 }
 
 QString withOnlineAudioRetryHint(const QString& message)
@@ -464,6 +464,26 @@ void AudioPlayerController::playAt(int index)
     m_forceReloadResolvedOnlineTrack = false;
     m_playlistModel->setCurrentIndex(index);
     play();
+}
+
+bool AudioPlayerController::retryOnlineTrackAt(int index)
+{
+    if (!m_playlistModel || index < 0 || index >= m_playlistModel->count()) {
+        return false;
+    }
+
+    const AudioTrack track = m_playlistModel->at(index);
+    if (track.isLocal) {
+        emit warningRequested(QStringLiteral("\u65e0\u6cd5\u91cd\u65b0\u89e3\u6790"),
+                              QStringLiteral("\u53ea\u6709\u5728\u7ebf\u97f3\u4e50\u53ef\u4ee5\u91cd\u65b0\u89e3\u6790\u64ad\u653e\u5730\u5740\u3002"));
+        return false;
+    }
+
+    clearPendingSeek();
+    m_forceReloadResolvedOnlineTrack = false;
+    m_playlistModel->setCurrentIndex(index);
+    resolveCurrentOnlineTrack();
+    return true;
 }
 
 void AudioPlayerController::playPrevious()

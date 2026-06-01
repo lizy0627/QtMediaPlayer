@@ -5,6 +5,7 @@
 #include <QStandardPaths>
 #include <QString>
 
+class QImage;
 class QPixmap;
 class QTimer;
 class FrameCaptureService;
@@ -19,6 +20,7 @@ public:
     explicit VideoCapture(QWidget* videoWidget, QObject* parent = nullptr);
 
     QString captureScreenshot();
+    QString captureScreenshot(const QString& filePath, qint64 positionMs);
     bool startRecording();
     QString stopRecording();
     bool isRecording() const;
@@ -42,6 +44,7 @@ private slots:
 private:
     QString writableMediaDirectory(QStandardPaths::StandardLocation location, const QString& childDirectory) const;
     QPixmap captureCurrentFrame() const;
+    QString saveScreenshotImage(const QImage& image);
 
     QString m_screenshotDirectory;
     QString m_recordingRootDirectory;

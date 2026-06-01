@@ -17,6 +17,28 @@ INCLUDEPATH += \
     $$PWD/danmaku \
     $$PWD/network
 
+FFMPEG_ROOT = C:/ffmpeg/ffmpeg-sdk/ffmpeg-8.1.1-full_build-shared
+
+contains(CONFIG, use_ffmpeg) {
+    DEFINES += USE_FFMPEG
+    INCLUDEPATH += \
+        $$PWD/ffmpeg \
+        $$FFMPEG_ROOT/include
+    LIBS += \
+        $$FFMPEG_ROOT/lib/libavformat.dll.a \
+        $$FFMPEG_ROOT/lib/libavcodec.dll.a \
+        $$FFMPEG_ROOT/lib/libavutil.dll.a \
+        $$FFMPEG_ROOT/lib/libswscale.dll.a \
+        $$FFMPEG_ROOT/lib/libswresample.dll.a
+    SOURCES += \
+        ffmpeg/ffmpegframeextractor.cpp \
+        ffmpeg/ffmpegprobe.cpp
+    HEADERS += \
+        ffmpeg/ffmpegframeextractor.h \
+        ffmpeg/ffmpegmediainfo.h \
+        ffmpeg/ffmpegprobe.h
+}
+
 BUILD_ROOT = $$OUT_PWD
 CONFIG(debug, debug|release) {
     BUILD_CONFIG = debug
@@ -69,6 +91,7 @@ SOURCES += \
     lyricwidget.cpp \
     lyricpanel.cpp \
     mediahistory.cpp \
+    mediainfodialog.cpp \
     mediafileprobe.cpp \
     mainwindowcontroller.cpp \
     migrationrunner.cpp \
@@ -97,6 +120,7 @@ SOURCES += \
     videohistorycoordinator.cpp \
     videoplaybackcontroller.cpp \
     videoplayercontroller.cpp \
+    videoqueuedialog.cpp \
     videoplayer.cpp \
     widget.cpp
 
@@ -142,6 +166,7 @@ HEADERS += \
     lyricservice.h \
     lyricwidget.h \
     mediaprobeservice.h \
+    mediainfodialog.h \
     mediafileprobe.h \
     mediaplaybackrouter.h \
     mediahistory.h \
@@ -170,6 +195,7 @@ HEADERS += \
     videohistorycoordinator.h \
     videoplaybackcontroller.h \
     videoplayercontroller.h \
+    videoqueuedialog.h \
     videocapture.h \
     videoencoder.h \
     widget.h

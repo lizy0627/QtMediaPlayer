@@ -27,6 +27,7 @@ signals:
     void addFilesRequested();
     void onlineSearchRequested();
     void deleteSelectedRequested();
+    void retrySelectedRequested();
     void clearRequested();
     void testAudioRequested();
     void loginRequested();

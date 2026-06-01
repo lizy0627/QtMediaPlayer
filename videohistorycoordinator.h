@@ -23,6 +23,8 @@ public:
     void restoreProgressIfNeeded(QObject* context,
                                  const QString& filePath,
                                  const std::function<void(qint64)>& restorePosition);
+    bool restoreProgressSilentlyIfUseful(const QString& filePath,
+                                         const std::function<void(qint64)>& restorePosition);
     void maybeMarkPlaybackStarted(qint64 duration);
     void saveCurrentProgress(qint64 position, qint64 duration);
     void saveCompletedProgress(qint64 position, qint64 duration);

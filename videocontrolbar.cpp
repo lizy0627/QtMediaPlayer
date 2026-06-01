@@ -1,16 +1,31 @@
 #include "videocontrolbar.h"
 
+#ifdef USE_FFMPEG
+#include "ffmpegframeextractor.h"
+#endif
+
 #include <QComboBox>
+#include <QCursor>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QFutureWatcher>
+#include <QGuiApplication>
+#include <QMouseEvent>
 #include <QPushButton>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
+#include <QStyleOptionSlider>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
 namespace {
+constexpr int kPreviewWidth = 160;
+constexpr int kPreviewHeight = 90;
+constexpr int kMaxPreviewCacheEntries = 120;
+
 void refreshStyle(QWidget* widget)
 {
     if (!widget) {
@@ -46,8 +61,14 @@ VideoControlBar::VideoControlBar(QWidget* parent)
     m_btnSearchOnline = createRoundButton("Search", "在线搜索视频", "videoToolSearch");
     connect(m_btnSearchOnline, &QPushButton::clicked, this, &VideoControlBar::searchOnlineRequested);
 
+    m_btnRetryOnline = createRoundButton("Retry", QStringLiteral("\u91cd\u8bd5\u89e3\u6790\u5f53\u524d\u5728\u7ebf\u89c6\u9891"), "videoToolRetry");
+    connect(m_btnRetryOnline, &QPushButton::clicked, this, &VideoControlBar::retryOnlineRequested);
+
     m_btnHistory = createRoundButton("Hist", "播放历史记录", "videoToolHistory");
     connect(m_btnHistory, &QPushButton::clicked, this, &VideoControlBar::historyRequested);
+
+    m_btnQueue = createRoundButton("Queue", "Video queue", "videoToolQueue");
+    connect(m_btnQueue, &QPushButton::clicked, this, &VideoControlBar::queueRequested);
 
     m_btnScreenshot = createRoundButton("Shot", "截图保存", "videoToolScreenshot");
     connect(m_btnScreenshot, &QPushButton::clicked, this, &VideoControlBar::screenshotRequested);
@@ -92,9 +113,24 @@ VideoControlBar::VideoControlBar(QWidget* parent)
     m_slider = new QSlider(Qt::Horizontal, this);
     m_slider->setRange(0, 100);
     m_slider->setFixedHeight(24);
+    m_slider->setMouseTracking(true);
+    m_slider->installEventFilter(this);
     connect(m_slider, &QSlider::sliderMoved, this, [this](int position) {
         emit progressJumpRequested(position);
     });
+
+    m_previewLabel = new QLabel(this, Qt::ToolTip | Qt::FramelessWindowHint);
+    m_previewLabel->setAlignment(Qt::AlignCenter);
+    m_previewLabel->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    m_previewLabel->setStyleSheet(QStringLiteral(
+        "QLabel { background: rgba(16, 20, 28, 230); border: 1px solid rgba(255, 255, 255, 90); padding: 4px; }"));
+    m_previewLabel->hide();
+
+    m_previewWatcher = new QFutureWatcher<PreviewFrameResult>(this);
+    connect(m_previewWatcher,
+            &QFutureWatcher<PreviewFrameResult>::finished,
+            this,
+            &VideoControlBar::onPreviewExtractionFinished);
 
     m_timeLabel = new QLabel("00:00 / 00:00", this);
     m_timeLabel->setProperty("role", "videoTime");
@@ -109,6 +145,10 @@ VideoControlBar::VideoControlBar(QWidget* parent)
     layout->addLayout(createButtonGroup(m_btnSearchOnline, "在线搜索"));
     layout->addSpacing(5);
     layout->addLayout(createButtonGroup(m_btnHistory, "播放历史"));
+    layout->addSpacing(5);
+    layout->addLayout(createButtonGroup(m_btnQueue, "Queue"));
+    layout->addSpacing(5);
+    layout->addLayout(createButtonGroup(m_btnRetryOnline, "Retry"));
     layout->addSpacing(5);
     layout->addLayout(createButtonGroup(m_btnScreenshot, "截图"));
     layout->addSpacing(5);
@@ -220,6 +260,49 @@ void VideoControlBar::setSpeedValue(double speed)
     }
 }
 
+void VideoControlBar::setPreviewVideoPath(const QString& filePath)
+{
+    const QString trimmedPath = filePath.trimmed();
+    if (m_previewVideoPath == trimmedPath) {
+        return;
+    }
+
+    m_previewVideoPath = trimmedPath;
+    clearPreviewCache();
+    hidePreview();
+}
+
+bool VideoControlBar::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched != m_slider) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    switch (event->type()) {
+    case QEvent::Enter:
+        m_previewHoverActive = true;
+        break;
+    case QEvent::MouseMove:
+    case QEvent::MouseButtonPress: {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        m_previewHoverActive = true;
+        m_lastPreviewGlobalPos = mouseEvent->globalPosition().toPoint();
+        const qint64 previewPosition = previewPositionFromSlider(
+            qBound(0, static_cast<int>(mouseEvent->position().x()), m_slider->width()));
+        requestPreview(previewPosition);
+        break;
+    }
+    case QEvent::Leave:
+    case QEvent::Hide:
+        hidePreview();
+        break;
+    default:
+        break;
+    }
+
+    return QWidget::eventFilter(watched, event);
+}
+
 QPushButton* VideoControlBar::createRoundButton(const QString& text, const QString& tooltip, const char* role)
 {
     QPushButton* button = new QPushButton(this);
@@ -276,4 +359,179 @@ QString VideoControlBar::formatTime(qint64 milliseconds) const
 void VideoControlBar::updateTimeLabel()
 {
     m_timeLabel->setText(formatTime(m_position) + " / " + formatTime(m_duration));
+}
+
+qint64 VideoControlBar::previewPositionFromSlider(int x) const
+{
+    if (!m_slider || m_duration <= 0 || m_slider->width() <= 0) {
+        return 0;
+    }
+
+    QStyleOptionSlider option;
+    option.initFrom(m_slider);
+    option.orientation = m_slider->orientation();
+    option.minimum = m_slider->minimum();
+    option.maximum = m_slider->maximum();
+    option.sliderPosition = m_slider->sliderPosition();
+    option.sliderValue = m_slider->value();
+    option.upsideDown = false;
+
+    const QRect groove = m_slider->style()->subControlRect(QStyle::CC_Slider,
+                                                           &option,
+                                                           QStyle::SC_SliderGroove,
+                                                           m_slider);
+    const int left = groove.isValid() ? groove.left() : 0;
+    const int width = groove.isValid() && groove.width() > 0 ? groove.width() : m_slider->width();
+    const int relativeX = qBound(0, x - left, width);
+    const int sliderPosition = QStyle::sliderValueFromPosition(0,
+                                                               static_cast<int>(m_duration),
+                                                               relativeX,
+                                                               width);
+    return qBound<qint64>(0, static_cast<qint64>(sliderPosition), m_duration);
+}
+
+void VideoControlBar::requestPreview(qint64 positionMs)
+{
+    if (m_previewVideoPath.isEmpty() || m_duration <= 0) {
+        hidePreview();
+        return;
+    }
+
+    const qint64 boundedPosition = qBound<qint64>(0, positionMs, m_duration);
+    const qint64 second = boundedPosition / 1000;
+    m_currentPreviewSecond = second;
+    movePreviewToCursor();
+
+    const auto cached = m_previewCache.constFind(second);
+    if (cached != m_previewCache.constEnd()) {
+        showPreview(*cached);
+        return;
+    }
+
+    if (m_previewWatcher && m_previewWatcher->isRunning()) {
+        m_queuedPreviewSecond = second;
+        return;
+    }
+
+    startPreviewExtraction(second);
+}
+
+void VideoControlBar::startPreviewExtraction(qint64 second)
+{
+#ifdef USE_FFMPEG
+    if (!m_previewWatcher || m_previewVideoPath.isEmpty() || second < 0) {
+        return;
+    }
+
+    m_extractingPreviewSecond = second;
+    m_queuedPreviewSecond = -1;
+    const QString filePath = m_previewVideoPath;
+    m_previewWatcher->setFuture(QtConcurrent::run([filePath, second]() {
+        PreviewFrameResult result;
+        result.filePath = filePath;
+        result.second = second;
+
+        QImage image;
+        QString errorMessage;
+        if (FFmpegFrameExtractor::extractFrame(filePath, second * 1000, image, &errorMessage)) {
+            result.image = image.scaled(kPreviewWidth,
+                                        kPreviewHeight,
+                                        Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+        }
+        return result;
+    }));
+#else
+    Q_UNUSED(second);
+#endif
+}
+
+void VideoControlBar::onPreviewExtractionFinished()
+{
+    if (!m_previewWatcher) {
+        return;
+    }
+
+    const PreviewFrameResult result = m_previewWatcher->result();
+    m_extractingPreviewSecond = -1;
+
+    if (result.filePath == m_previewVideoPath && !result.image.isNull()) {
+        if (m_previewCache.size() >= kMaxPreviewCacheEntries) {
+            m_previewCache.erase(m_previewCache.begin());
+        }
+        const QPixmap pixmap = QPixmap::fromImage(result.image);
+        m_previewCache.insert(result.second, pixmap);
+        if (m_previewHoverActive && m_currentPreviewSecond == result.second) {
+            showPreview(pixmap);
+        }
+    }
+
+    const qint64 nextSecond = m_queuedPreviewSecond;
+    m_queuedPreviewSecond = -1;
+    if (m_previewHoverActive
+        && nextSecond >= 0
+        && nextSecond != result.second
+        && !m_previewCache.contains(nextSecond)) {
+        startPreviewExtraction(nextSecond);
+    } else if (m_previewHoverActive
+               && nextSecond >= 0
+               && m_previewCache.contains(nextSecond)) {
+        m_currentPreviewSecond = nextSecond;
+        showPreview(m_previewCache.value(nextSecond));
+    }
+}
+
+void VideoControlBar::showPreview(const QPixmap& pixmap)
+{
+    if (!m_previewLabel || pixmap.isNull()) {
+        return;
+    }
+
+    m_previewLabel->setPixmap(pixmap);
+    m_previewLabel->setFixedSize(pixmap.size() + QSize(10, 10));
+    movePreviewToCursor();
+    m_previewLabel->show();
+}
+
+void VideoControlBar::movePreviewToCursor()
+{
+    if (!m_previewLabel || !m_slider || !m_previewHoverActive) {
+        return;
+    }
+
+    const QSize previewSize = m_previewLabel->sizeHint().isValid()
+        ? m_previewLabel->sizeHint()
+        : QSize(kPreviewWidth + 10, kPreviewHeight + 10);
+    QPoint target(m_lastPreviewGlobalPos.x() - previewSize.width() / 2,
+                  m_slider->mapToGlobal(QPoint(0, 0)).y() - previewSize.height() - 10);
+
+    if (QScreen* screen = QGuiApplication::screenAt(m_lastPreviewGlobalPos)) {
+        const QRect available = screen->availableGeometry();
+        target.setX(qBound(available.left(),
+                           target.x(),
+                           available.right() - previewSize.width()));
+        target.setY(qBound(available.top(),
+                           target.y(),
+                           available.bottom() - previewSize.height()));
+    }
+
+    m_previewLabel->move(target);
+}
+
+void VideoControlBar::hidePreview()
+{
+    m_previewHoverActive = false;
+    m_currentPreviewSecond = -1;
+    m_queuedPreviewSecond = -1;
+    if (m_previewLabel) {
+        m_previewLabel->hide();
+    }
+}
+
+void VideoControlBar::clearPreviewCache()
+{
+    m_previewCache.clear();
+    m_extractingPreviewSecond = -1;
+    m_queuedPreviewSecond = -1;
+    m_currentPreviewSecond = -1;
 }

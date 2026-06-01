@@ -44,6 +44,7 @@ private:
     void showStartupStatus(const QString& message);
     void showStartupWarnings();
     void showAboutDialog();
+    void showCurrentMediaInfo();
 
     Ui::Widget *ui;
     VideoPlayer* m_video;

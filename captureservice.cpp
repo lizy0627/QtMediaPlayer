@@ -28,6 +28,11 @@ QString CaptureService::captureScreenshot()
     return m_capture->captureScreenshot();
 }
 
+QString CaptureService::captureScreenshot(const QString& filePath, qint64 positionMs)
+{
+    return m_capture->captureScreenshot(filePath, positionMs);
+}
+
 bool CaptureService::startRecording()
 {
     return m_capture->startRecording();

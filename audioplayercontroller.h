@@ -37,6 +37,7 @@ public:
     void pause();
     void togglePlayback();
     void playAt(int index);
+    bool retryOnlineTrackAt(int index);
     void playPrevious();
     void playNext();
     void setPlayMode(PlaylistPlayMode mode);

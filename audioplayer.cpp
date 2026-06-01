@@ -16,6 +16,7 @@
 #include "lyricpanel.h"
 #include "lyricservice.h"
 #include "mediahistory.h"
+#include "mediainfodialog.h"
 #include "network/onlinemusicservice.h"
 #include "playlistmodel.h"
 #include "playlistpanel.h"
@@ -87,6 +88,28 @@ void AudioPlayer::audioPause()
     m_controller->pause();
 }
 
+bool AudioPlayer::showMediaInfo()
+{
+    if (!m_playlistModel || !m_playlistModel->hasCurrent()) {
+        m_dialogService->showInformation(this,
+                                         QStringLiteral("\u5a92\u4f53\u4fe1\u606f"),
+                                         QStringLiteral("\u8bf7\u5148\u6253\u5f00\u672c\u5730\u97f3\u9891\u6587\u4ef6\u3002"));
+        return false;
+    }
+
+    const AudioTrack track = m_playlistModel->currentTrack();
+    if (!track.isLocal || !track.url.isLocalFile()) {
+        m_dialogService->showInformation(this,
+                                         QStringLiteral("\u5a92\u4f53\u4fe1\u606f"),
+                                         QStringLiteral("\u5a92\u4f53\u4fe1\u606f\u9762\u677f\u4ec5\u652f\u6301\u672c\u5730\u6587\u4ef6\u3002"));
+        return false;
+    }
+
+    MediaInfoDialog dialog(track.url.toLocalFile(), this);
+    dialog.exec();
+    return true;
+}
+
 void AudioPlayer::createUI()
 {
     auto* layout = new QVBoxLayout(this);
@@ -114,6 +137,17 @@ void AudioPlayer::setupConnections()
             this, &AudioPlayer::onSearchOnline);
     connect(playlistPanel, &PlaylistPanel::deleteSelectedRequested,
             this, &AudioPlayer::deleteSelectedSong);
+    connect(playlistPanel, &PlaylistPanel::retrySelectedRequested,
+            this, [this, playlistPanel]() {
+                const int selectedRow = playlistPanel->currentRow();
+                if (selectedRow < 0) {
+                    m_dialogService->showWarning(this,
+                                                 QStringLiteral("\u63d0\u793a"),
+                                                 QStringLiteral("\u8bf7\u5148\u9009\u62e9\u8981\u91cd\u8bd5\u7684\u5728\u7ebf\u6b4c\u66f2\u3002"));
+                    return;
+                }
+                m_controller->retryOnlineTrackAt(selectedRow);
+            });
     connect(playlistPanel, &PlaylistPanel::clearRequested,
             this, &AudioPlayer::clearPlaylist);
     connect(playlistPanel, &PlaylistPanel::testAudioRequested,

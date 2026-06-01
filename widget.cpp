@@ -145,6 +145,10 @@ void Widget::setupMainMenu(QMenuBar *menuBar)
         {"音频播放器", ":/assets/audio.png", [this]() { m_controller->showAudioPage(); }}
     }, true);
 
+    m->createAction(QStringLiteral("\u5a92\u4f53\u4fe1\u606f"),
+                    ":/assets/about.png",
+                    [this]() { showCurrentMediaInfo(); });
+
     m = new Menu(helpMenu);
     m->createAction("关于", ":/assets/about.png", [this]() { showAboutDialog(); });
 }
@@ -157,6 +161,18 @@ void Widget::showStartupStatus(const QString& message)
 
     m_statusLabel->setText(message);
     m_statusLabel->setVisible(true);
+}
+
+void Widget::showCurrentMediaInfo()
+{
+    if (ui->st->currentWidget() == ui->page_audio && m_audio) {
+        m_audio->showMediaInfo();
+        return;
+    }
+
+    if (m_video) {
+        m_video->showMediaInfo();
+    }
 }
 
 void Widget::showStartupWarnings()

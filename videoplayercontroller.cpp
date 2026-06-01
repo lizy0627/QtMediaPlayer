@@ -1,5 +1,6 @@
 #include "videoplayercontroller.h"
 
+#include <QDebug>
 #include <QTimer>
 #include <QUrl>
 
@@ -160,6 +161,20 @@ QString mediaProbeWarningMessage(const ProbeResult& result)
              result.supportedVideoFormats.join(QStringLiteral(", ")),
              LocalPlaybackDiagnostics::quickProbeNotice());
 }
+
+void debugMediaInfo(const QString& filePath)
+{
+    const MediaInfo info = MediaProbeService::probeMediaInfo(filePath);
+    qDebug() << "FFmpegProbe media info"
+             << "formatName:" << info.formatName
+             << "videoCodec:" << info.videoCodec
+             << "audioCodec:" << info.audioCodec
+             << "width:" << info.width
+             << "height:" << info.height
+             << "fps:" << info.fps
+             << "bitRate:" << info.bitRate
+             << "duration:" << info.durationMs;
+}
 }
 
 VideoPlayerController::VideoPlayerController(QWidget* viewParent,
@@ -284,6 +299,7 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
                                   mediaProbeWarningMessage(probeResult));
             return false;
         }
+        debugMediaInfo(filePath);
     } else if (!isPlayableRemoteUrl(QUrl::fromUserInput(filePath))) {
         emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
                               QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002\n\n%1")
@@ -297,6 +313,7 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
     if (localFile) {
         m_currentOnlinePlaybackFailed = false;
         m_currentVideoPath = filePath;
+        emit previewVideoPathChanged(m_currentVideoPath);
         if (m_historyCoordinator) {
             m_historyCoordinator->setCurrentVideo(filePath);
         }
@@ -313,12 +330,17 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
         if (m_danmakuCoordinator) {
             m_danmakuCoordinator->loadVideo(filePath);
         }
+
+        if (m_silentRestoreQueueItem) {
+            checkAndRestoreProgressSilently(filePath);
+        }
     } else {
         m_currentOnlinePlaybackFailed = false;
         clearLocalVideoStateForOnlinePlayback();
         m_playbackController->openUrl(QUrl(filePath));
     }
 
+    m_silentRestoreQueueItem = false;
     m_playbackController->play();
     return true;
 }
@@ -477,6 +499,20 @@ QString VideoPlayerController::currentVideoPath() const
     return m_currentVideoPath;
 }
 
+QStringList VideoPlayerController::videoQueue() const
+{
+    return m_videoQueue;
+}
+
+int VideoPlayerController::currentVideoQueueIndex() const
+{
+    if (m_videoQueueIndex < 0 || m_videoQueueIndex >= m_videoQueue.size()) {
+        return -1;
+    }
+
+    return m_videoQueue.at(m_videoQueueIndex) == m_currentVideoPath ? m_videoQueueIndex : -1;
+}
+
 void VideoPlayerController::showHistoryDialog(QWidget* parent)
 {
     if (m_historyCoordinator) {
@@ -501,7 +537,7 @@ void VideoPlayerController::showOnlineSearchDialog(QWidget* parent)
 void VideoPlayerController::requestScreenshot()
 {
     if (m_captureCoordinator) {
-        m_captureCoordinator->requestScreenshot(isPlaying());
+        m_captureCoordinator->requestScreenshot(isPlaying(), m_currentVideoPath, position());
     }
 }
 
@@ -532,6 +568,34 @@ void VideoPlayerController::playOnlineVideo(const VideoInfo& video)
         m_currentOnlinePlaybackFailed = false;
         m_onlineCoordinator->playOnlineVideo(video);
     }
+}
+
+bool VideoPlayerController::playQueuedVideo(int index)
+{
+    return openQueuedVideo(index, true);
+}
+
+bool VideoPlayerController::removeQueuedVideo(int index)
+{
+    if (index < 0 || index >= m_videoQueue.size()) {
+        return false;
+    }
+
+    m_videoQueue.removeAt(index);
+    if (m_videoQueue.isEmpty()) {
+        m_videoQueueIndex = -1;
+        emitVideoQueueChanged();
+        return true;
+    }
+
+    if (index < m_videoQueueIndex) {
+        --m_videoQueueIndex;
+    } else if (index == m_videoQueueIndex) {
+        m_videoQueueIndex = index - 1;
+    }
+
+    emitVideoQueueChanged();
+    return true;
 }
 
 void VideoPlayerController::onOnlinePlaybackResolved(const OnlinePlaybackRequest& request)
@@ -724,6 +788,17 @@ void VideoPlayerController::checkAndRestoreProgress(const QString& filePath)
     });
 }
 
+void VideoPlayerController::checkAndRestoreProgressSilently(const QString& filePath)
+{
+    if (!m_historyCoordinator) {
+        return;
+    }
+
+    m_historyCoordinator->restoreProgressSilentlyIfUseful(filePath, [this](qint64 savedPosition) {
+        schedulePendingSeek(savedPosition, PendingSeekMode::Resume);
+    });
+}
+
 void VideoPlayerController::clearPendingSeek()
 {
     m_pendingSeekPosition = -1;
@@ -796,6 +871,7 @@ void VideoPlayerController::clearLocalVideoStateForOnlinePlayback()
 {
     clearVideoQueue();
     m_currentVideoPath.clear();
+    emit previewVideoPathChanged(QString());
     if (m_historyCoordinator) {
         m_historyCoordinator->clearCurrentVideo();
     }
@@ -808,11 +884,21 @@ void VideoPlayerController::clearLocalVideoStateForOnlinePlayback()
 
 void VideoPlayerController::clearVideoQueue()
 {
+    if (m_videoQueue.isEmpty() && m_videoQueueIndex == -1) {
+        return;
+    }
+
     m_videoQueue.clear();
     m_videoQueueIndex = -1;
+    emitVideoQueueChanged();
 }
 
-bool VideoPlayerController::openQueuedVideo(int index)
+void VideoPlayerController::emitVideoQueueChanged()
+{
+    emit videoQueueChanged(m_videoQueue, currentVideoQueueIndex());
+}
+
+bool VideoPlayerController::openQueuedVideo(int index, bool restoreProgressSilently)
 {
     if (index < 0 || index >= m_videoQueue.size()) {
         clearVideoQueue();
@@ -822,18 +908,23 @@ bool VideoPlayerController::openQueuedVideo(int index)
     m_videoQueueIndex = index;
     m_openingVideoQueueItem = true;
     const bool previousSkipRestorePrompt = m_skipNextRestorePrompt;
-    if (index > 0) {
+    const bool previousSilentRestoreQueueItem = m_silentRestoreQueueItem;
+    if (restoreProgressSilently) {
         m_skipNextRestorePrompt = true;
+        m_silentRestoreQueueItem = true;
     }
     const bool opened = open(m_videoQueue.at(index), true);
     if (!opened) {
         m_skipNextRestorePrompt = previousSkipRestorePrompt;
+        m_silentRestoreQueueItem = previousSilentRestoreQueueItem;
     }
     m_openingVideoQueueItem = false;
 
     if (!opened) {
         return playNextQueuedVideo();
     }
+
+    emitVideoQueueChanged();
     return true;
 }
 
@@ -844,7 +935,7 @@ bool VideoPlayerController::playNextQueuedVideo()
         return false;
     }
 
-    return openQueuedVideo(m_videoQueueIndex + 1);
+    return openQueuedVideo(m_videoQueueIndex + 1, true);
 }
 
 bool VideoPlayerController::retryCurrentOnlineVideoIfFailed()

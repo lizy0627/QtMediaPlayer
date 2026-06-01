@@ -91,11 +91,14 @@ PlaylistPanel::PlaylistPanel(QWidget* parent)
     playlistLayout->addLayout(addButtonLayout);
 
     auto* actionButtonLayout = new QHBoxLayout();
+    auto* retryButton = createActionButton(QStringLiteral("\u91cd\u8bd5\u64ad\u653e"), "warning");
     auto* deleteButton = createActionButton(QStringLiteral("删除选中"), "danger");
     auto* testButton = createActionButton(QStringLiteral("测试音频"), "warning");
     connect(deleteButton, &QPushButton::clicked, this, &PlaylistPanel::deleteSelectedRequested);
+    connect(retryButton, &QPushButton::clicked, this, &PlaylistPanel::retrySelectedRequested);
     connect(testButton, &QPushButton::clicked, this, &PlaylistPanel::testAudioRequested);
     actionButtonLayout->addWidget(deleteButton);
+    actionButtonLayout->addWidget(retryButton);
     actionButtonLayout->addWidget(testButton);
     playlistLayout->addLayout(actionButtonLayout);
 
@@ -203,8 +206,10 @@ void PlaylistPanel::showContextMenu(const QPoint& pos)
     AudioStyle::apply(&contextMenu);
 
     QAction* playAction = nullptr;
+    QAction* retryAction = nullptr;
     QAction* deleteAction = nullptr;
     if (item) {
+        retryAction = contextMenu.addAction(QStringLiteral("\u91cd\u65b0\u89e3\u6790/\u91cd\u8bd5\u64ad\u653e"));
         playAction = contextMenu.addAction(QStringLiteral("播放"));
         deleteAction = contextMenu.addAction(QStringLiteral("删除"));
         contextMenu.addSeparator();
@@ -218,6 +223,9 @@ void PlaylistPanel::showContextMenu(const QPoint& pos)
 
     if (selectedAction == playAction) {
         emit songActivated(m_listWidget->row(item));
+    } else if (selectedAction == retryAction) {
+        m_listWidget->setCurrentItem(item);
+        emit retrySelectedRequested();
     } else if (selectedAction == deleteAction) {
         m_listWidget->setCurrentItem(item);
         emit deleteSelectedRequested();

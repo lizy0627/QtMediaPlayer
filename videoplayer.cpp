@@ -19,11 +19,13 @@
 #include "danmakupanel.h"
 #include "danmakurepository.h"
 #include "mediahistory.h"
+#include "mediainfodialog.h"
 #include "onlinevideoservice.h"
 #include "usersession.h"
 #include "videocontrolbar.h"
 #include "videoplaybackcontroller.h"
 #include "videoplayercontroller.h"
+#include "videoqueuedialog.h"
 
 VideoPlayerWidget::VideoPlayerWidget(QWidget* parent,
                                      UserSession* userSession,
@@ -153,6 +155,25 @@ void VideoPlayerWidget::showMyDanmakuRecords()
     if (m_controller) {
         m_controller->showMyDanmakuRecords(m_parent);
     }
+}
+
+bool VideoPlayerWidget::showMediaInfo()
+{
+    if (!m_controller) {
+        return false;
+    }
+
+    const QString filePath = m_controller->currentVideoPath().trimmed();
+    if (filePath.isEmpty()) {
+        QMessageBox::information(m_parent,
+                                 QStringLiteral("\u5a92\u4f53\u4fe1\u606f"),
+                                 QStringLiteral("\u8bf7\u5148\u6253\u5f00\u672c\u5730\u89c6\u9891\u6587\u4ef6\u3002"));
+        return false;
+    }
+
+    MediaInfoDialog dialog(filePath, m_parent);
+    dialog.exec();
+    return true;
 }
 
 void VideoPlayerWidget::showError(const QString& message)
@@ -354,6 +375,7 @@ void VideoPlayerWidget::connectSignals()
     connect(m_controlBar, &VideoControlBar::historyRequested, this, [this]() {
         m_controller->showHistoryDialog(m_parent);
     });
+    connect(m_controlBar, &VideoControlBar::queueRequested, this, &VideoPlayerWidget::showVideoQueueDialog);
     connect(m_controlBar, &VideoControlBar::myDanmakuRequested, this, [this]() {
         m_controller->showMyDanmakuRecords(m_parent);
     });
@@ -369,6 +391,10 @@ void VideoPlayerWidget::connectSignals()
     connect(m_controller, &VideoPlayerController::durationChanged, m_controlBar, &VideoControlBar::setDuration);
     connect(m_controller, &VideoPlayerController::volumeChanged, m_controlBar, &VideoControlBar::setVolumeValue);
     connect(m_controller, &VideoPlayerController::speedChanged, m_controlBar, &VideoControlBar::setSpeedValue);
+    connect(m_controller,
+            &VideoPlayerController::previewVideoPathChanged,
+            m_controlBar,
+            &VideoControlBar::setPreviewVideoPath);
     connect(m_controller, &VideoPlayerController::danmakuEnabledChanged, m_controlBar, &VideoControlBar::setDanmakuEnabled);
     connect(m_controller, &VideoPlayerController::playbackError, this, &VideoPlayerWidget::showError);
     connect(m_controller, &VideoPlayerController::warningRequested, this, &VideoPlayerWidget::showWarning);
@@ -410,6 +436,21 @@ void VideoPlayerWidget::connectSignals()
     }
 
     m_controlBar->setLoggedInUser(m_userSession ? m_userSession->currentUser() : QString());
+}
+
+void VideoPlayerWidget::showVideoQueueDialog()
+{
+    if (!m_controller) {
+        return;
+    }
+
+    if (!m_queueDialog) {
+        m_queueDialog = new VideoQueueDialog(m_controller, m_parent);
+    }
+
+    m_queueDialog->show();
+    m_queueDialog->raise();
+    m_queueDialog->activateWindow();
 }
 
 void VideoPlayerWidget::updateAiPanelLayout(bool visible)

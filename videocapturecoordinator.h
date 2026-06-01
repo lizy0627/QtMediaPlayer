@@ -13,7 +13,9 @@ class VideoCaptureCoordinator : public QObject
 public:
     explicit VideoCaptureCoordinator(CaptureService* captureService, QObject* parent = nullptr);
 
-    void requestScreenshot(bool playbackActive);
+    void requestScreenshot(bool playbackActive,
+                           const QString& filePath = QString(),
+                           qint64 positionMs = 0);
     void toggleRecording(bool playbackActive);
 
     bool isRecording() const;

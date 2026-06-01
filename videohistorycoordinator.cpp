@@ -6,6 +6,18 @@
 #include <QMessageBox>
 #include <QPushButton>
 
+namespace {
+bool isUsefulResumeProgress(const MediaHistoryRecord& record)
+{
+    if (!record.isValid() || record.isCompleted) {
+        return false;
+    }
+
+    const int progress = record.progressPercent();
+    return progress >= 5 && progress <= 95;
+}
+}
+
 VideoHistoryCoordinator::VideoHistoryCoordinator(MediaHistoryService* historyService,
                                                  QWidget* viewParent,
                                                  QObject* parent)
@@ -54,12 +66,7 @@ void VideoHistoryCoordinator::restoreProgressIfNeeded(QObject* context,
     Q_UNUSED(context);
 
     const auto record = m_historyService->recordFor(filePath, MediaKind::Video);
-    if (!record.has_value() || record->isCompleted) {
-        return;
-    }
-
-    const int progress = record->progressPercent();
-    if (progress < 5 || progress > 95) {
+    if (!record.has_value() || !isUsefulResumeProgress(*record)) {
         return;
     }
 
@@ -70,7 +77,7 @@ void VideoHistoryCoordinator::restoreProgressIfNeeded(QObject* context,
         QStringLiteral("上次播放到：%1 / %2 (%3%)\n\n是否从上次位置继续播放？")
             .arg(record->positionText())
             .arg(record->durationText())
-            .arg(progress));
+            .arg(record->progressPercent()));
     msgBox.setIcon(QMessageBox::Question);
 
     QPushButton* continueBtn = msgBox.addButton(QStringLiteral("继续播放"), QMessageBox::YesRole);
@@ -81,6 +88,23 @@ void VideoHistoryCoordinator::restoreProgressIfNeeded(QObject* context,
     if (msgBox.clickedButton() == continueBtn && restorePosition) {
         restorePosition(record->lastPosition);
     }
+}
+
+bool VideoHistoryCoordinator::restoreProgressSilentlyIfUseful(
+    const QString& filePath,
+    const std::function<void(qint64)>& restorePosition)
+{
+    if (!m_historyService || !restorePosition) {
+        return false;
+    }
+
+    const auto record = m_historyService->recordFor(filePath, MediaKind::Video);
+    if (!record.has_value() || !isUsefulResumeProgress(*record)) {
+        return false;
+    }
+
+    restorePosition(record->lastPosition);
+    return true;
 }
 
 void VideoHistoryCoordinator::maybeMarkPlaybackStarted(qint64 duration)

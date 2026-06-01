@@ -2,10 +2,14 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QImage>
 #include <QPixmap>
 #include <QTimer>
 #include <QWidget>
 
+#ifdef USE_FFMPEG
+#include "ffmpegframeextractor.h"
+#endif
 #include "framecaptureservice.h"
 #include "videoencoder.h"
 
@@ -44,9 +48,37 @@ QString VideoCapture::captureScreenshot()
         return QString();
     }
 
+    return saveScreenshotImage(pixmap.toImage());
+}
+
+QString VideoCapture::captureScreenshot(const QString& filePath, qint64 positionMs)
+{
+#ifdef USE_FFMPEG
+    if (!filePath.trimmed().isEmpty()) {
+        QImage image;
+        QString errorMessage;
+        if (FFmpegFrameExtractor::extractFrame(filePath, positionMs, image, &errorMessage) && !image.isNull()) {
+            return saveScreenshotImage(image);
+        }
+    }
+#else
+    Q_UNUSED(filePath)
+    Q_UNUSED(positionMs)
+#endif
+
+    return captureScreenshot();
+}
+
+QString VideoCapture::saveScreenshotImage(const QImage& image)
+{
+    if (image.isNull()) {
+        emit captureFailed(QStringLiteral("\u65e0\u6cd5\u622a\u53d6\u5f53\u524d\u89c6\u9891\u753b\u9762\u3002"));
+        return QString();
+    }
+
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
     const QString filePath = m_screenshotDirectory + QStringLiteral("/Screenshot_%1.png").arg(timestamp);
-    if (!pixmap.save(filePath, "PNG", 100)) {
+    if (!image.save(filePath, "PNG", 100)) {
         emit captureFailed(QStringLiteral("\u622a\u56fe\u4fdd\u5b58\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"));
         return QString();
     }

@@ -53,6 +53,8 @@ public:
     qint64 position() const;
     qint64 duration() const;
     QString currentVideoPath() const;
+    QStringList videoQueue() const;
+    int currentVideoQueueIndex() const;
 
     void showHistoryDialog(QWidget* parent);
     void showMyDanmakuRecords(QWidget* parent);
@@ -62,6 +64,8 @@ public:
     void toggleDanmaku();
     void sendDanmaku(const QString& content, const QString& color, int type);
     void playOnlineVideo(const VideoInfo& video);
+    bool playQueuedVideo(int index);
+    bool removeQueuedVideo(int index);
 
 signals:
     void playbackStateChanged(bool playing);
@@ -73,6 +77,8 @@ signals:
     void playbackError(QString message);
     void warningRequested(QString title, QString message);
     void infoRequested(QString title, QString message);
+    void videoQueueChanged(QStringList filePaths, int currentIndex);
+    void previewVideoPathChanged(QString filePath);
 
 private slots:
     void onPlaybackStateChanged(QMediaPlayer::PlaybackState state);
@@ -92,6 +98,7 @@ private:
 
     void checkAndRestoreProgress(const QString& filePath);
     void clearPendingSeek();
+    void checkAndRestoreProgressSilently(const QString& filePath);
     qint64 resolvedPendingSeekPosition(qint64 requestedPosition, PendingSeekMode mode) const;
     void schedulePendingSeek(qint64 positionValue,
                              PendingSeekMode mode,
@@ -99,7 +106,8 @@ private:
     void tryApplyPendingSeek(QMediaPlayer::MediaStatus status);
     void clearLocalVideoStateForOnlinePlayback();
     void clearVideoQueue();
-    bool openQueuedVideo(int index);
+    void emitVideoQueueChanged();
+    bool openQueuedVideo(int index, bool restoreProgressSilently = false);
     bool playNextQueuedVideo();
     bool retryCurrentOnlineVideoIfFailed();
 
@@ -117,6 +125,7 @@ private:
     QStringList m_videoQueue;
     int m_videoQueueIndex = -1;
     bool m_openingVideoQueueItem = false;
+    bool m_silentRestoreQueueItem = false;
     bool m_currentOnlinePlaybackFailed = false;
 };
 

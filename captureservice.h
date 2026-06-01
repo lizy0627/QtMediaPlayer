@@ -18,6 +18,7 @@ public:
 
     VideoCapture* capture() const;
     QString captureScreenshot();
+    QString captureScreenshot(const QString& filePath, qint64 positionMs);
     bool startRecording();
     QString stopRecording();
     bool isRecording() const;

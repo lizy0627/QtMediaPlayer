@@ -2,7 +2,35 @@
 
 #include "mediafileprobe.h"
 
+#ifdef USE_FFMPEG
+#include "ffmpeg/ffmpegmediainfo.h"
+#include "ffmpeg/ffmpegprobe.h"
+#endif
+
 namespace {
+#ifdef USE_FFMPEG
+MediaInfo toMediaInfo(const FFmpegMediaInfo& ffmpegInfo)
+{
+    MediaInfo info;
+    info.valid = ffmpegInfo.valid;
+    info.filePath = ffmpegInfo.filePath;
+    info.formatName = ffmpegInfo.formatName;
+    info.durationMs = ffmpegInfo.durationMs;
+    info.bitRate = ffmpegInfo.bitRate;
+    info.hasVideo = ffmpegInfo.hasVideo;
+    info.hasAudio = ffmpegInfo.hasAudio;
+    info.videoCodec = ffmpegInfo.videoCodec;
+    info.audioCodec = ffmpegInfo.audioCodec;
+    info.width = ffmpegInfo.width;
+    info.height = ffmpegInfo.height;
+    info.fps = ffmpegInfo.fps;
+    info.sampleRate = ffmpegInfo.sampleRate;
+    info.channels = ffmpegInfo.channels;
+    info.errorMessage = ffmpegInfo.errorMessage;
+    return info;
+}
+#endif
+
 ProbeStatus statusForIssue(MediaProbeIssue issue)
 {
     switch (issue) {
@@ -36,6 +64,22 @@ ProbeResult makeResult(const MediaProbeResult& probeResult)
 ProbeResult MediaProbeService::probeLocalFile(const QString& filePath)
 {
     return makeResult(MediaFileProbe::probe(filePath));
+}
+
+MediaInfo MediaProbeService::probeMediaInfo(const QString& filePath)
+{
+#ifdef USE_FFMPEG
+    return toMediaInfo(FFmpegProbe::probeFile(filePath));
+#else
+    MediaInfo info;
+    info.filePath = filePath;
+
+    const MediaProbeResult probeResult = MediaFileProbe::probe(filePath);
+    info.errorMessage = probeResult.supported
+        ? QStringLiteral("\u5f53\u524d\u672a\u542f\u7528 FFmpeg \u6df1\u5ea6\u63a2\u6d4b")
+        : probeResult.reason;
+    return info;
+#endif
 }
 
 QStringList MediaProbeService::supportedAudioFormats()

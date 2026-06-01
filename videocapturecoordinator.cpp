@@ -8,7 +8,9 @@ VideoCaptureCoordinator::VideoCaptureCoordinator(CaptureService* captureService,
 {
 }
 
-void VideoCaptureCoordinator::requestScreenshot(bool playbackActive)
+void VideoCaptureCoordinator::requestScreenshot(bool playbackActive,
+                                                const QString& filePath,
+                                                qint64 positionMs)
 {
     if (!m_captureService) {
         emit warningRequested(QStringLiteral("提示"), QStringLiteral("截图服务当前不可用。"));
@@ -20,7 +22,7 @@ void VideoCaptureCoordinator::requestScreenshot(bool playbackActive)
         return;
     }
 
-    m_captureService->captureScreenshot();
+    m_captureService->captureScreenshot(filePath, positionMs);
 }
 
 void VideoCaptureCoordinator::toggleRecording(bool playbackActive)

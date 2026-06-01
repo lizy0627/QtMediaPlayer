@@ -23,6 +23,7 @@ class QVBoxLayout;
 class QVideoWidget;
 class UserSession;
 class VideoControlBar;
+class VideoQueueDialog;
 class VideoPlaybackController;
 class VideoPlayerController;
 class QWidget;
@@ -57,6 +58,7 @@ public:
     void pause();
     void play();
     void showMyDanmakuRecords();
+    bool showMediaInfo();
 
 public slots:
     void showError(const QString& message);
@@ -75,6 +77,7 @@ private:
     void createServices();
     void connectSignals();
     void updateAiPanelLayout(bool visible);
+    void showVideoQueueDialog();
 
     QWidget* m_parent = nullptr;
     QWidget* m_videoContainer = nullptr;
@@ -93,6 +96,7 @@ private:
     DanmakuRepository* m_danmakuRepository = nullptr;
     DanmakuController* m_danmakuController = nullptr;
     VideoPlayerController* m_controller = nullptr;
+    VideoQueueDialog* m_queueDialog = nullptr;
 
     DanmakuOverlay* m_danmakuWidget = nullptr;
     DanmakuPanel* m_danmakuDisplay = nullptr;

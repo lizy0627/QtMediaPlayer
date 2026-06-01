@@ -723,6 +723,45 @@ QDialog#OnlineVideoSearchDialog QProgressBar::chunk {
     border-radius: 6px;
 }
 
+QDialog#MediaInfoDialog {
+    background-color: #1a202c;
+}
+
+QDialog#MediaInfoDialog QLabel[role="title"] {
+    color: #90cdf4;
+    font-size: 18pt;
+    font-weight: 700;
+}
+
+QDialog#MediaInfoDialog QLabel[role="fieldName"] {
+    color: #a0aec0;
+    font-weight: 600;
+}
+
+QDialog#MediaInfoDialog QLabel[role="fieldValue"] {
+    color: #edf2f7;
+    background-color: #202633;
+    border: 1px solid #3a4252;
+    border-radius: 6px;
+    padding: 7px 10px;
+}
+
+QDialog#MediaInfoDialog QLabel[role="status"],
+QDialog#MediaInfoDialog QLabel[role="warning"] {
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+QDialog#MediaInfoDialog QLabel[role="status"] {
+    color: #c6f6d5;
+    background-color: rgba(47, 133, 90, 0.22);
+}
+
+QDialog#MediaInfoDialog QLabel[role="warning"] {
+    color: #fed7d7;
+    background-color: rgba(197, 48, 48, 0.22);
+}
+
 QLineEdit,
 QTextEdit,
 QPlainTextEdit,
