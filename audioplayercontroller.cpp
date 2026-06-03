@@ -156,11 +156,6 @@ QString mediaProbeWarningMessage(const QStringList& failedFiles)
              LocalPlaybackDiagnostics::quickProbeNotice());
 }
 
-QString mediaProbeWarningMessage(const ProbeResult& result)
-{
-    return mediaProbeWarningMessage(QStringList{result.reason});
-}
-
 bool trackMatchesOnlineSource(const AudioTrack& track, const QString& sourceId)
 {
     const QString normalizedSourceId = sourceId.trimmed();
@@ -221,11 +216,12 @@ void AudioPlayerController::addLocalFiles(const QStringList& files)
     QStringList rejectedFiles;
 
     for (const QString& file : files) {
-        const ProbeResult probeResult = MediaProbeService::probeLocalFile(file);
-        if (probeResult.status != ProbeStatus::Supported) {
+        const LocalPlaybackProbeResult playbackProbe =
+            MediaProbeService::probeLocalPlayback(file, MediaRoute::Audio);
+        if (!playbackProbe.playable) {
             const QFileInfo fileInfo(file);
             const QString displayName = fileInfo.fileName().isEmpty() ? file : fileInfo.fileName();
-            rejectedFiles.append(QStringLiteral("%1: %2").arg(displayName, probeResult.reason));
+            rejectedFiles.append(QStringLiteral("%1: %2").arg(displayName, playbackProbe.message));
             continue;
         }
 
@@ -323,10 +319,10 @@ bool AudioPlayerController::playHistoryRecord(const MediaHistoryRecord& record)
         track.playbackStatus = AudioTrackPlaybackStatus::PendingValidation;
         track.statusMessage = QStringLiteral("从历史记录恢复，开始播放时会重新验证在线音频。");
     } else {
-        const ProbeResult probeResult = MediaProbeService::probeLocalFile(historyPath);
-        if (probeResult.status != ProbeStatus::Supported) {
-            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
-                                  mediaProbeWarningMessage(probeResult));
+        const LocalPlaybackProbeResult playbackProbe =
+            MediaProbeService::probeLocalPlayback(historyPath, MediaRoute::Audio);
+        if (!playbackProbe.playable) {
+            emit warningRequested(playbackProbe.title, playbackProbe.message);
             return false;
         }
         const QFileInfo fileInfo(historyPath);
@@ -407,11 +403,11 @@ void AudioPlayerController::play()
     }
 
     if (track.isLocal) {
-        const ProbeResult probeResult = MediaProbeService::probeLocalFile(track.url.toLocalFile());
-        if (probeResult.status != ProbeStatus::Supported) {
-            markCurrentTrackFailed(probeResult.reason);
-            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
-                                  mediaProbeWarningMessage(probeResult));
+        const LocalPlaybackProbeResult playbackProbe =
+            MediaProbeService::probeLocalPlayback(track.url.toLocalFile(), MediaRoute::Audio);
+        if (!playbackProbe.playable) {
+            markCurrentTrackFailed(playbackProbe.message);
+            emit warningRequested(playbackProbe.title, playbackProbe.message);
             return;
         }
     } else if (!isPlayableRemoteUrl(track.url)) {

@@ -150,7 +150,7 @@ QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString
                           "扩展名支持不代表编码一定可播放。");
 }
 
-QString mediaProbeWarningMessage(const ProbeResult& result)
+[[maybe_unused]] QString mediaProbeWarningMessage(const ProbeResult& result)
 {
     return QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6\u3002\n\n"
                           "\u5177\u4f53\u539f\u56e0\uff1a\n%1\n\n"
@@ -162,7 +162,7 @@ QString mediaProbeWarningMessage(const ProbeResult& result)
              LocalPlaybackDiagnostics::quickProbeNotice());
 }
 
-void debugMediaInfo(const QString& filePath)
+[[maybe_unused]] void debugMediaInfo(const QString& filePath)
 {
     const MediaInfo info = MediaProbeService::probeMediaInfo(filePath);
     qDebug() << "FFmpegProbe media info"
@@ -293,13 +293,12 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
     }
 
     if (localFile) {
-        const ProbeResult probeResult = MediaProbeService::probeLocalFile(filePath);
-        if (probeResult.status != ProbeStatus::Supported) {
-            emit warningRequested(QStringLiteral("\u4e0d\u652f\u6301\u64ad\u653e\u8be5\u6587\u4ef6"),
-                                  mediaProbeWarningMessage(probeResult));
+        const LocalPlaybackProbeResult playbackProbe =
+            MediaProbeService::probeLocalPlayback(filePath, MediaRoute::Video);
+        if (!playbackProbe.playable) {
+            emit warningRequested(playbackProbe.title, playbackProbe.message);
             return false;
         }
-        debugMediaInfo(filePath);
     } else if (!isPlayableRemoteUrl(QUrl::fromUserInput(filePath))) {
         emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
                               QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548\uff1a\u672a\u83b7\u5f97\u53ef\u64ad\u653e\u7684 http/https \u89c6\u9891\u76f4\u94fe\u3002\n\n%1")

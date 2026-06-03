@@ -12,6 +12,8 @@ extern "C" {
 }
 
 #include <QByteArray>
+#include <QFile>
+#include <QFileInfo>
 
 #include <memory>
 
@@ -57,6 +59,34 @@ bool fail(QString* errorMessage, const QString& message)
         *errorMessage = message;
     }
     return false;
+}
+
+bool validateLocalVideoFile(const QString& filePath, QString* errorMessage)
+{
+    const QString normalizedPath = filePath.trimmed();
+    if (normalizedPath.isEmpty()) {
+        return fail(errorMessage, QStringLiteral("文件路径为空，无法提取视频帧"));
+    }
+
+    const QFileInfo fileInfo(normalizedPath);
+    if (!fileInfo.exists()) {
+        return fail(errorMessage, QStringLiteral("文件不存在：%1").arg(fileInfo.absoluteFilePath()));
+    }
+    if (!fileInfo.isFile()) {
+        return fail(errorMessage, QStringLiteral("不是有效的本地视频文件：%1").arg(fileInfo.absoluteFilePath()));
+    }
+
+    QFile file(fileInfo.absoluteFilePath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return fail(errorMessage, QStringLiteral("文件不可读，可能没有访问权限：%1").arg(fileInfo.absoluteFilePath()));
+    }
+    file.close();
+
+    if (fileInfo.size() <= 0) {
+        return fail(errorMessage, QStringLiteral("文件为空，无法提取视频帧：%1").arg(fileInfo.absoluteFilePath()));
+    }
+
+    return true;
 }
 
 bool isUsableVideoStream(const AVStream* stream)
@@ -138,7 +168,7 @@ bool receiveFrame(AVCodecContext* codecContext,
             return false;
         }
         if (result < 0) {
-            fail(errorMessage, QStringLiteral("Failed to decode video frame: %1").arg(ffmpegErrorString(result)));
+            fail(errorMessage, QStringLiteral("FFmpeg 解码视频帧失败：%1").arg(ffmpegErrorString(result)));
             return true;
         }
 
@@ -168,48 +198,52 @@ bool FFmpegFrameExtractor::extractFrame(const QString& filePath,
         errorMessage->clear();
     }
 
+    if (!validateLocalVideoFile(filePath, errorMessage)) {
+        return false;
+    }
+
     AVFormatContext* rawFormatContext = nullptr;
-    const QByteArray encodedPath = filePath.toUtf8();
+    const QByteArray encodedPath = QFileInfo(filePath.trimmed()).absoluteFilePath().toUtf8();
 
     int result = avformat_open_input(&rawFormatContext, encodedPath.constData(), nullptr, nullptr);
     if (result < 0) {
         avformat_close_input(&rawFormatContext);
-        return fail(errorMessage, QStringLiteral("Failed to open media file: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 打开媒体文件失败：%1").arg(ffmpegErrorString(result)));
     }
 
     std::unique_ptr<AVFormatContext, decltype(&closeInput)> formatContext(rawFormatContext, closeInput);
     result = avformat_find_stream_info(formatContext.get(), nullptr);
     if (result < 0) {
-        return fail(errorMessage, QStringLiteral("Failed to read stream info: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 读取流信息失败：%1").arg(ffmpegErrorString(result)));
     }
 
     const int videoStreamIndex = findVideoStreamIndex(formatContext.get());
     if (videoStreamIndex < 0) {
-        return fail(errorMessage, QStringLiteral("FFmpeg did not find a video stream"));
+        return fail(errorMessage, QStringLiteral("FFmpeg 未发现可用的视频流"));
     }
 
     AVStream* videoStream = formatContext->streams[videoStreamIndex];
     const AVCodecParameters* codecParameters = videoStream->codecpar;
     const AVCodec* decoder = avcodec_find_decoder(codecParameters->codec_id);
     if (decoder == nullptr) {
-        return fail(errorMessage, QStringLiteral("Failed to find FFmpeg video decoder"));
+        return fail(errorMessage, QStringLiteral("FFmpeg 未找到对应的视频解码器"));
     }
 
     std::unique_ptr<AVCodecContext, decltype(&freeCodecContext)> codecContext(
         avcodec_alloc_context3(decoder),
         freeCodecContext);
     if (!codecContext) {
-        return fail(errorMessage, QStringLiteral("Failed to allocate FFmpeg decoder context"));
+        return fail(errorMessage, QStringLiteral("FFmpeg 解码器上下文创建失败"));
     }
 
     result = avcodec_parameters_to_context(codecContext.get(), codecParameters);
     if (result < 0) {
-        return fail(errorMessage, QStringLiteral("Failed to configure FFmpeg decoder: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 配置解码器失败：%1").arg(ffmpegErrorString(result)));
     }
 
     result = avcodec_open2(codecContext.get(), decoder, nullptr);
     if (result < 0) {
-        return fail(errorMessage, QStringLiteral("Failed to open FFmpeg decoder: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 打开视频解码器失败：%1").arg(ffmpegErrorString(result)));
     }
 
     const qint64 clampedPositionMs = qMax<qint64>(0, positionMs);
@@ -218,14 +252,14 @@ bool FFmpegFrameExtractor::extractFrame(const QString& filePath,
                                                 videoStream->time_base);
     result = av_seek_frame(formatContext.get(), videoStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
     if (result < 0) {
-        return fail(errorMessage, QStringLiteral("Failed to seek media file: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 定位视频时间点失败：%1").arg(ffmpegErrorString(result)));
     }
     avcodec_flush_buffers(codecContext.get());
 
     std::unique_ptr<AVPacket, decltype(&freePacket)> packet(av_packet_alloc(), freePacket);
     std::unique_ptr<AVFrame, decltype(&freeFrame)> frame(av_frame_alloc(), freeFrame);
     if (!packet || !frame) {
-        return fail(errorMessage, QStringLiteral("Failed to allocate FFmpeg packet or frame"));
+        return fail(errorMessage, QStringLiteral("FFmpeg 数据包或帧缓存创建失败"));
     }
 
     while ((result = av_read_frame(formatContext.get(), packet.get())) >= 0) {
@@ -237,7 +271,7 @@ bool FFmpegFrameExtractor::extractFrame(const QString& filePath,
         result = avcodec_send_packet(codecContext.get(), packet.get());
         av_packet_unref(packet.get());
         if (result < 0) {
-            return fail(errorMessage, QStringLiteral("Failed to send video packet to decoder: %1").arg(ffmpegErrorString(result)));
+            return fail(errorMessage, QStringLiteral("FFmpeg 发送视频包到解码器失败：%1").arg(ffmpegErrorString(result)));
         }
 
         if (receiveFrame(codecContext.get(), targetTimestamp, frame.get(), outImage, errorMessage)) {
@@ -246,19 +280,62 @@ bool FFmpegFrameExtractor::extractFrame(const QString& filePath,
     }
 
     if (result != AVERROR_EOF) {
-        return fail(errorMessage, QStringLiteral("Failed to read video packet: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 读取视频包失败：%1").arg(ffmpegErrorString(result)));
     }
 
     result = avcodec_send_packet(codecContext.get(), nullptr);
     if (result < 0) {
-        return fail(errorMessage, QStringLiteral("Failed to flush FFmpeg decoder: %1").arg(ffmpegErrorString(result)));
+        return fail(errorMessage, QStringLiteral("FFmpeg 刷新视频解码器失败：%1").arg(ffmpegErrorString(result)));
     }
 
     if (receiveFrame(codecContext.get(), targetTimestamp, frame.get(), outImage, errorMessage)) {
         return !outImage.isNull();
     }
 
-    return fail(errorMessage, QStringLiteral("Failed to extract video frame at the requested position"));
+    return fail(errorMessage, QStringLiteral("FFmpeg 未能在指定时间点附近解码出视频帧"));
 }
 
+QImage FFmpegFrameExtractor::extractFrame(const QString& filePath, qint64 positionMs)
+{
+    QImage image;
+    m_lastError.clear();
+    if (!extractFrame(filePath, positionMs, image, &m_lastError)) {
+        return QImage();
+    }
+    return image;
+}
+
+QString FFmpegFrameExtractor::lastError() const
+{
+    return m_lastError;
+}
+
+#endif // USE_FFMPEG
+
+#ifndef USE_FFMPEG
+bool FFmpegFrameExtractor::extractFrame(const QString& filePath,
+                                        qint64 positionMs,
+                                        QImage& outImage,
+                                        QString* errorMessage)
+{
+    Q_UNUSED(filePath)
+    Q_UNUSED(positionMs)
+    outImage = QImage();
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("当前未启用 FFmpeg，无法从视频文件提取帧");
+    }
+    return false;
+}
+
+QImage FFmpegFrameExtractor::extractFrame(const QString& filePath, qint64 positionMs)
+{
+    QImage image;
+    extractFrame(filePath, positionMs, image, &m_lastError);
+    return image;
+}
+
+QString FFmpegFrameExtractor::lastError() const
+{
+    return m_lastError;
+}
 #endif // USE_FFMPEG

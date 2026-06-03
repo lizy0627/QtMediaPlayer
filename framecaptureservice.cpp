@@ -1,5 +1,7 @@
 #include "framecaptureservice.h"
 
+#include "ffmpeg/ffmpegframeextractor.h"
+
 #include <QGuiApplication>
 #include <QPoint>
 #include <QRect>
@@ -25,6 +27,21 @@ QWidget* FrameCaptureService::sourceWidget() const
 QPixmap FrameCaptureService::captureCurrentFrame() const
 {
     return captureWidgetFrame(m_sourceWidget);
+}
+
+QImage FrameCaptureService::captureVideoFrame(const QString& filePath, qint64 positionMs)
+{
+    m_lastError.clear();
+    QImage image = captureVideoFrame(filePath, positionMs, &m_lastError);
+    if (!image.isNull()) {
+        m_lastError.clear();
+    }
+    return image;
+}
+
+QString FrameCaptureService::lastError() const
+{
+    return m_lastError;
 }
 
 QPixmap FrameCaptureService::captureWidgetFrame(QWidget* widget)
@@ -58,4 +75,20 @@ QPixmap FrameCaptureService::captureWidgetFrame(QWidget* widget)
     }
 
     return pixmap;
+}
+
+QImage FrameCaptureService::captureVideoFrame(const QString& filePath,
+                                              qint64 positionMs,
+                                              QString* errorMessage)
+{
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+
+    FFmpegFrameExtractor extractor;
+    QImage image = extractor.extractFrame(filePath, positionMs);
+    if (image.isNull() && errorMessage != nullptr) {
+        *errorMessage = extractor.lastError();
+    }
+    return image;
 }

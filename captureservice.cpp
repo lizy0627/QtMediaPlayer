@@ -73,6 +73,18 @@ QPixmap CaptureService::captureCurrentFrame() const
     return m_capture ? m_capture->frameCaptureService()->captureCurrentFrame() : QPixmap();
 }
 
+QImage CaptureService::captureVideoFrame(const QString& filePath, qint64 positionMs)
+{
+    FrameCaptureService* service = frameCaptureService();
+    return service ? service->captureVideoFrame(filePath, positionMs) : QImage();
+}
+
+QString CaptureService::lastFrameCaptureError() const
+{
+    FrameCaptureService* service = frameCaptureService();
+    return service ? service->lastError() : QStringLiteral("画面捕获服务当前不可用");
+}
+
 FrameCaptureService* CaptureService::frameCaptureService() const
 {
     return m_capture ? m_capture->frameCaptureService() : nullptr;

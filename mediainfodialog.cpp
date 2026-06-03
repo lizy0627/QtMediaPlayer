@@ -31,6 +31,27 @@ QString fpsText(double fps)
     return QString::number(fps, 'f', 2);
 }
 
+QString yesNoText(bool value)
+{
+    return value ? QStringLiteral("\u662f") : QStringLiteral("\u5426");
+}
+
+QString sampleRateText(int sampleRate)
+{
+    if (sampleRate <= 0) {
+        return QStringLiteral("-");
+    }
+    return QStringLiteral("%1 Hz").arg(sampleRate);
+}
+
+QString channelsText(int channels)
+{
+    if (channels <= 0) {
+        return QStringLiteral("-");
+    }
+    return QString::number(channels);
+}
+
 QString bitRateText(qint64 bitRate)
 {
     if (bitRate <= 0) {
@@ -68,7 +89,7 @@ MediaInfoDialog::MediaInfoDialog(const QString& filePath, QWidget* parent)
 {
     setObjectName(QStringLiteral("MediaInfoDialog"));
     setWindowTitle(QStringLiteral("\u5a92\u4f53\u4fe1\u606f"));
-    resize(620, 360);
+    resize(680, 480);
 
     const MediaInfo info = MediaProbeService::probeMediaInfo(filePath);
 
@@ -84,10 +105,14 @@ MediaInfoDialog::MediaInfoDialog(const QString& filePath, QWidget* parent)
     int row = 0;
     addInfoRow(grid, row++, QStringLiteral("\u6587\u4ef6\u8def\u5f84"), info.filePath.isEmpty() ? filePath : info.filePath);
     addInfoRow(grid, row++, QStringLiteral("\u5bb9\u5668\u683c\u5f0f"), displayText(info.formatName));
+    addInfoRow(grid, row++, QStringLiteral("\u5305\u542b\u89c6\u9891"), yesNoText(info.hasVideo));
+    addInfoRow(grid, row++, QStringLiteral("\u5305\u542b\u97f3\u9891"), yesNoText(info.hasAudio));
     addInfoRow(grid, row++, QStringLiteral("\u89c6\u9891\u7f16\u7801"), displayText(info.videoCodec));
     addInfoRow(grid, row++, QStringLiteral("\u97f3\u9891\u7f16\u7801"), displayText(info.audioCodec));
     addInfoRow(grid, row++, QStringLiteral("\u5206\u8fa8\u7387"), resolutionText(info));
     addInfoRow(grid, row++, QStringLiteral("FPS"), fpsText(info.fps));
+    addInfoRow(grid, row++, QStringLiteral("\u91c7\u6837\u7387"), sampleRateText(info.sampleRate));
+    addInfoRow(grid, row++, QStringLiteral("\u58f0\u9053\u6570"), channelsText(info.channels));
     addInfoRow(grid, row++, QStringLiteral("\u7801\u7387"), bitRateText(info.bitRate));
     addInfoRow(grid, row++, QStringLiteral("\u65f6\u957f"), durationText(info.durationMs));
 

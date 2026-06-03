@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QtGlobal>
 
+#include "mediafileprobe.h"
+
 enum class ProbeStatus {
     Supported,
     FileNotFound,
@@ -17,6 +19,7 @@ enum class ProbeStatus {
 struct ProbeResult {
     ProbeStatus status = ProbeStatus::UnknownError;
     QString reason;
+    MediaRoute route = MediaRoute::Unsupported;
     QStringList supportedAudioFormats;
     QStringList supportedVideoFormats;
 };
@@ -39,10 +42,21 @@ struct MediaInfo {
     QString errorMessage;
 };
 
+struct LocalPlaybackProbeResult {
+    bool playable = false;
+    MediaRoute route = MediaRoute::Unsupported;
+    QString title;
+    QString message;
+    ProbeResult quickProbe;
+    MediaInfo mediaInfo;
+};
+
 class MediaProbeService
 {
 public:
     static ProbeResult probeLocalFile(const QString& filePath);
+    static LocalPlaybackProbeResult probeLocalPlayback(const QString& filePath,
+                                                       MediaRoute expectedRoute = MediaRoute::Unsupported);
     static MediaInfo probeMediaInfo(const QString& filePath);
     static QStringList supportedAudioFormats();
     static QStringList supportedVideoFormats();

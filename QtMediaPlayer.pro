@@ -31,10 +31,8 @@ contains(CONFIG, use_ffmpeg) {
         $$FFMPEG_ROOT/lib/libswscale.dll.a \
         $$FFMPEG_ROOT/lib/libswresample.dll.a
     SOURCES += \
-        ffmpeg/ffmpegframeextractor.cpp \
         ffmpeg/ffmpegprobe.cpp
     HEADERS += \
-        ffmpeg/ffmpegframeextractor.h \
         ffmpeg/ffmpegmediainfo.h \
         ffmpeg/ffmpegprobe.h
 }
@@ -71,6 +69,7 @@ SOURCES += \
     audioplayerwidget.cpp \
     audiostyle.cpp \
     captureservice.cpp \
+    ffmpeg/ffmpegframeextractor.cpp \
     framecaptureservice.cpp \
     databaseconfigloader.cpp \
     localplaybackdiagnostics.cpp \
@@ -145,6 +144,7 @@ HEADERS += \
     audiostyle.h \
     audiotrack.h \
     captureservice.h \
+    ffmpeg/ffmpegframeextractor.h \
     framecaptureservice.h \
     databaseconfigloader.h \
     videocapturecoordinator.h \

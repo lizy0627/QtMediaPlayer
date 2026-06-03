@@ -1,6 +1,7 @@
 #ifndef CAPTURESERVICE_H
 #define CAPTURESERVICE_H
 
+#include <QImage>
 #include <QObject>
 #include <QPixmap>
 #include <QString>
@@ -27,6 +28,8 @@ public:
     QString screenshotDirectory() const;
     bool isFFmpegAvailable() const;
     QPixmap captureCurrentFrame() const;
+    QImage captureVideoFrame(const QString& filePath, qint64 positionMs);
+    QString lastFrameCaptureError() const;
     FrameCaptureService* frameCaptureService() const;
 
 signals:

@@ -7,9 +7,6 @@
 #include <QTimer>
 #include <QWidget>
 
-#ifdef USE_FFMPEG
-#include "ffmpegframeextractor.h"
-#endif
 #include "framecaptureservice.h"
 #include "videoencoder.h"
 
@@ -53,18 +50,12 @@ QString VideoCapture::captureScreenshot()
 
 QString VideoCapture::captureScreenshot(const QString& filePath, qint64 positionMs)
 {
-#ifdef USE_FFMPEG
-    if (!filePath.trimmed().isEmpty()) {
-        QImage image;
-        QString errorMessage;
-        if (FFmpegFrameExtractor::extractFrame(filePath, positionMs, image, &errorMessage) && !image.isNull()) {
+    if (m_frameCaptureService && !filePath.trimmed().isEmpty()) {
+        const QImage image = m_frameCaptureService->captureVideoFrame(filePath, positionMs);
+        if (!image.isNull()) {
             return saveScreenshotImage(image);
         }
     }
-#else
-    Q_UNUSED(filePath)
-    Q_UNUSED(positionMs)
-#endif
 
     return captureScreenshot();
 }
