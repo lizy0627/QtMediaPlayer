@@ -24,6 +24,7 @@ class QVideoWidget;
 class UserSession;
 class VideoControlBar;
 class VideoQueueDialog;
+class VideoRenderContainer;
 class VideoPlaybackController;
 class VideoPlayerController;
 class QWidget;
@@ -59,6 +60,8 @@ public:
     void play();
     void showMyDanmakuRecords();
     bool showMediaInfo();
+    void setUseFFmpegBackend(bool enabled);
+    bool isUsingFFmpegBackend() const;
 
 public slots:
     void showError(const QString& message);
@@ -84,6 +87,7 @@ private:
     VideoControlBar* m_controlBar = nullptr;
     QSplitter* m_splitter = nullptr;
     QVBoxLayout* m_mainLayout = nullptr;
+    VideoRenderContainer* m_videoSurface = nullptr;
     QVideoWidget* m_video = nullptr;
 
     UserSession* m_userSession = nullptr;

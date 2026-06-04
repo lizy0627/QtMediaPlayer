@@ -2,11 +2,11 @@
 #define VIDEOPLAYERCONTROLLER_H
 
 #include <QObject>
-#include <QMediaPlayer>
 #include <QString>
 #include <QStringList>
 
 #include "onlinevideotypes.h"
+#include "playback/iplaybackbackend.h"
 
 class CaptureService;
 class DanmakuController;
@@ -81,10 +81,10 @@ signals:
     void previewVideoPathChanged(QString filePath);
 
 private slots:
-    void onPlaybackStateChanged(QMediaPlayer::PlaybackState state);
+    void onPlaybackStateChanged(IPlaybackBackend::PlaybackState state);
     void onDurationChanged(qint64 duration);
-    void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
-    void onPlayerError(QMediaPlayer::Error error, const QString& errorString);
+    void onMediaStatusChanged(IPlaybackBackend::MediaStatus status);
+    void onPlayerError(IPlaybackBackend::PlaybackError error, const QString& errorString);
     void onOnlinePlaybackResolved(const OnlinePlaybackRequest& request);
     void onOnlinePlaybackResolveFailed(const QString& message);
     void saveCurrentProgress();
@@ -103,7 +103,7 @@ private:
     void schedulePendingSeek(qint64 positionValue,
                              PendingSeekMode mode,
                              qint64 highlightPosition = -1);
-    void tryApplyPendingSeek(QMediaPlayer::MediaStatus status);
+    void tryApplyPendingSeek(IPlaybackBackend::MediaStatus status);
     void clearLocalVideoStateForOnlinePlayback();
     void clearVideoQueue();
     void emitVideoQueueChanged();

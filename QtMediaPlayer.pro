@@ -17,23 +17,99 @@ INCLUDEPATH += \
     $$PWD/danmaku \
     $$PWD/network
 
-FFMPEG_ROOT = C:/ffmpeg/ffmpeg-sdk/ffmpeg-8.1.1-full_build-shared
-
 contains(CONFIG, use_ffmpeg) {
+    isEmpty(FFMPEG_ROOT) {
+        FFMPEG_ROOT = $$(FFMPEG_ROOT)
+    }
+
+    isEmpty(FFMPEG_ROOT) {
+        exists($$PWD/third_party/ffmpeg/include/libavformat/avformat.h) {
+            FFMPEG_ROOT = $$PWD/third_party/ffmpeg
+        } else:exists($$PWD/ffmpeg/include/libavformat/avformat.h) {
+            FFMPEG_ROOT = $$PWD/ffmpeg
+        }
+    }
+
+    isEmpty(FFMPEG_ROOT) {
+        error("FFmpeg support requested. Set FFMPEG_ROOT or place the SDK under third_party/ffmpeg.")
+    }
+
+    isEmpty(FFMPEG_INCLUDE_DIR) {
+        FFMPEG_INCLUDE_DIR = $$FFMPEG_ROOT/include
+    }
+    isEmpty(FFMPEG_LIB_DIR) {
+        FFMPEG_LIB_DIR = $$FFMPEG_ROOT/lib
+    }
+    isEmpty(FFMPEG_BIN_DIR) {
+        FFMPEG_BIN_DIR = $$FFMPEG_ROOT/bin
+    }
+
+    !exists($$FFMPEG_INCLUDE_DIR/libavformat/avformat.h) {
+        error("FFmpeg headers not found: $$FFMPEG_INCLUDE_DIR")
+    }
+    !exists($$FFMPEG_LIB_DIR) {
+        error("FFmpeg library directory not found: $$FFMPEG_LIB_DIR")
+    }
+
     DEFINES += USE_FFMPEG
     INCLUDEPATH += \
         $$PWD/ffmpeg \
-        $$FFMPEG_ROOT/include
-    LIBS += \
-        $$FFMPEG_ROOT/lib/libavformat.dll.a \
-        $$FFMPEG_ROOT/lib/libavcodec.dll.a \
-        $$FFMPEG_ROOT/lib/libavutil.dll.a \
-        $$FFMPEG_ROOT/lib/libswscale.dll.a \
-        $$FFMPEG_ROOT/lib/libswresample.dll.a
+        $$FFMPEG_INCLUDE_DIR
+
+    win32-msvc* {
+        FFMPEG_IMPORT_LIBS = \
+            avformat.lib \
+            avcodec.lib \
+            avutil.lib \
+            swscale.lib \
+            swresample.lib
+
+        !exists($$FFMPEG_LIB_DIR/avformat.lib):exists($$FFMPEG_LIB_DIR/libavformat.lib) {
+            FFMPEG_IMPORT_LIBS = \
+                libavformat.lib \
+                libavcodec.lib \
+                libavutil.lib \
+                libswscale.lib \
+                libswresample.lib
+        }
+
+        for(ffmpegLib, FFMPEG_IMPORT_LIBS) {
+            LIBS += $$quote($$shell_path($$FFMPEG_LIB_DIR/$$ffmpegLib))
+        }
+    } else:win32-g++ {
+        FFMPEG_IMPORT_LIBS = \
+            libavformat.dll.a \
+            libavcodec.dll.a \
+            libavutil.dll.a \
+            libswscale.dll.a \
+            libswresample.dll.a
+
+        for(ffmpegLib, FFMPEG_IMPORT_LIBS) {
+            LIBS += $$quote($$FFMPEG_LIB_DIR/$$ffmpegLib)
+        }
+    } else {
+        LIBS += -L$$shell_path($$FFMPEG_LIB_DIR) \
+            -lavformat \
+            -lavcodec \
+            -lavutil \
+            -lswscale \
+            -lswresample
+    }
+
+    win32 {
+        exists($$FFMPEG_BIN_DIR) {
+            message("FFmpeg runtime DLL directory: $$FFMPEG_BIN_DIR")
+        } else {
+            warning("FFmpeg bin directory not found. Runtime DLLs must be copied beside the executable or added to PATH.")
+        }
+    }
+
     SOURCES += \
+        ffmpeg/ffmpegplaybackbackend.cpp \
         ffmpeg/ffmpegprobe.cpp
     HEADERS += \
         ffmpeg/ffmpegmediainfo.h \
+        ffmpeg/ffmpegplaybackbackend.h \
         ffmpeg/ffmpegprobe.h
 }
 
@@ -49,6 +125,10 @@ OBJECTS_DIR = $$BUILD_ROOT/obj/$$BUILD_CONFIG
 MOC_DIR = $$BUILD_ROOT/moc/$$BUILD_CONFIG
 RCC_DIR = $$BUILD_ROOT/rcc/$$BUILD_CONFIG
 UI_DIR = $$BUILD_ROOT/ui
+
+contains(CONFIG, use_ffmpeg):win32:exists($$FFMPEG_BIN_DIR/*.dll) {
+    QMAKE_POST_LINK += $$quote($$QMAKE_COPY $$shell_path($$FFMPEG_BIN_DIR/*.dll) $$shell_path($$DESTDIR)) $$escape_expand(\\n\\t)
+}
 
 SOURCES += \
     aichatcontroller.cpp \
@@ -70,6 +150,7 @@ SOURCES += \
     audiostyle.cpp \
     captureservice.cpp \
     ffmpeg/ffmpegframeextractor.cpp \
+    ffmpeg/ffmpegvideowidget.cpp \
     framecaptureservice.cpp \
     databaseconfigloader.cpp \
     localplaybackdiagnostics.cpp \
@@ -109,6 +190,7 @@ SOURCES += \
     network/onlinevideoservice.cpp \
     playlistmodel.cpp \
     playlistpanel.cpp \
+    playback/qtmediaplaybackbackend.cpp \
     searchcache.cpp \
     spectrumpanel.cpp \
     usersession.cpp \
@@ -145,6 +227,7 @@ HEADERS += \
     audiotrack.h \
     captureservice.h \
     ffmpeg/ffmpegframeextractor.h \
+    ffmpeg/ffmpegvideowidget.h \
     framecaptureservice.h \
     databaseconfigloader.h \
     videocapturecoordinator.h \
@@ -183,6 +266,8 @@ HEADERS += \
     onlinevideosearch.h \
     playlistmodel.h \
     playlistpanel.h \
+    playback/iplaybackbackend.h \
+    playback/qtmediaplaybackbackend.h \
     searchcache.h \
     spectrumpanel.h \
     spectrumwidget.h \

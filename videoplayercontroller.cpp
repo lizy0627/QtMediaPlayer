@@ -17,9 +17,10 @@
 namespace {
 constexpr qint64 kResumeNearEndThresholdMs = 5000;
 
-bool isReadyForDeferredSeek(QMediaPlayer::MediaStatus status)
+bool isReadyForDeferredSeek(IPlaybackBackend::MediaStatus status)
 {
-    return status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia;
+    return status == IPlaybackBackend::MediaStatus::Loaded
+        || status == IPlaybackBackend::MediaStatus::Buffered;
 }
 
 bool isPlayableRemoteUrl(const QUrl& url)
@@ -44,7 +45,7 @@ QString browserOnlyMessage(const OnlinePlaybackRequest& request)
 {
     QString message = request.errorMessage.trimmed();
     if (message.isEmpty()) {
-        message = QStringLiteral("\u5f53\u524d\u7ed3\u679c\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u4e2d\u6253\u5f00\uff1a\u7b2c\u4e09\u65b9\u5e73\u53f0\u672a\u63d0\u4f9b\u53ef\u76f4\u63a5\u4ea4\u7ed9 QMediaPlayer \u7684\u5355\u4e00\u5a92\u4f53\u76f4\u94fe\u3002");
+        message = QStringLiteral("\u5f53\u524d\u7ed3\u679c\u53ea\u80fd\u5728\u6d4f\u89c8\u5668\u4e2d\u6253\u5f00\uff1a\u7b2c\u4e09\u65b9\u5e73\u53f0\u672a\u63d0\u4f9b\u53ef\u76f4\u63a5\u4ea4\u7ed9\u5f53\u524d\u64ad\u653e\u540e\u7aef\u7684\u5355\u4e00\u5a92\u4f53\u76f4\u94fe\u3002");
     }
 
     const QString originalLink = copyableOriginalLink(request);
@@ -88,22 +89,26 @@ QString withOnlineVideoRetryHint(const QString& message)
     return trimmedMessage + onlineVideoRetryHint();
 }
 
-QString playerErrorTitle(QMediaPlayer::Error error)
+QString playerErrorTitle(IPlaybackBackend::PlaybackError error)
 {
     switch (error) {
-    case QMediaPlayer::ResourceError:
+    case IPlaybackBackend::PlaybackError::ResourceError:
         return QStringLiteral("\u8d44\u6e90\u9519\u8bef");
-    case QMediaPlayer::FormatError:
+    case IPlaybackBackend::PlaybackError::FormatError:
         return QStringLiteral("\u683c\u5f0f\u9519\u8bef");
-    case QMediaPlayer::NetworkError:
+    case IPlaybackBackend::PlaybackError::NetworkError:
         return QStringLiteral("\u7f51\u7edc\u9519\u8bef");
-    case QMediaPlayer::AccessDeniedError:
+    case IPlaybackBackend::PlaybackError::AccessDeniedError:
         return QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd");
-    case QMediaPlayer::NoError:
+    case IPlaybackBackend::PlaybackError::NoError:
         return QString();
+    case IPlaybackBackend::PlaybackError::UnknownError:
+        break;
     default:
         return QStringLiteral("\u64ad\u653e\u9519\u8bef");
     }
+
+    return QStringLiteral("\u64ad\u653e\u9519\u8bef");
 }
 
 QString localPlaybackFailureHint()
@@ -112,24 +117,26 @@ QString localPlaybackFailureHint()
                           "如果播放失败，可能是文件损坏、编码不受支持，或系统缺少对应解码器。");
 }
 
-QString playerErrorMessage(QMediaPlayer::Error error, const QString& errorString, bool localFile)
+QString playerErrorMessage(IPlaybackBackend::PlaybackError error, const QString& errorString, bool localFile)
 {
     QString message;
     switch (error) {
-    case QMediaPlayer::ResourceError:
+    case IPlaybackBackend::PlaybackError::ResourceError:
         message = QStringLiteral("\u8d44\u6e90\u9519\u8bef\uff1a\u65e0\u6cd5\u6253\u5f00\u89c6\u9891\u8d44\u6e90\uff0c\u76f4\u94fe\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002");
         break;
-    case QMediaPlayer::FormatError:
+    case IPlaybackBackend::PlaybackError::FormatError:
         message = QStringLiteral("\u683c\u5f0f\u9519\u8bef\uff1a\u5f53\u524d\u89c6\u9891\u683c\u5f0f\u6216\u7b2c\u4e09\u65b9\u8fd4\u56de\u5185\u5bb9\u4e0d\u53d7\u652f\u6301\u3002");
         break;
-    case QMediaPlayer::NetworkError:
+    case IPlaybackBackend::PlaybackError::NetworkError:
         message = QStringLiteral("\u7f51\u7edc\u9519\u8bef\uff1a\u65e0\u6cd5\u8bbf\u95ee\u8fdc\u7a0b\u89c6\u9891\u8d44\u6e90\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u6216\u7a0d\u540e\u91cd\u8bd5\u3002");
         break;
-    case QMediaPlayer::AccessDeniedError:
+    case IPlaybackBackend::PlaybackError::AccessDeniedError:
         message = QStringLiteral("\u8bbf\u95ee\u88ab\u62d2\u7edd\uff1a\u8be5\u89c6\u9891\u53ef\u80fd\u9700\u8981 Cookie\u3001Referer\u3001\u767b\u5f55\u6743\u9650\u6216\u4e0d\u652f\u6301\u5728\u5ba2\u6237\u7aef\u76f4\u64ad\u3002");
         break;
-    case QMediaPlayer::NoError:
+    case IPlaybackBackend::PlaybackError::NoError:
         return QString();
+    case IPlaybackBackend::PlaybackError::UnknownError:
+        [[fallthrough]];
     default:
         message = QStringLiteral("\u64ad\u653e\u5668\u53d1\u751f\u672a\u77e5\u9519\u8bef\u3002");
         break;
@@ -258,27 +265,27 @@ VideoPlayerController::VideoPlayerController(QWidget* viewParent,
             this,
             &VideoPlayerController::onOnlinePlaybackResolveFailed);
 
-    QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
-    if (!player) {
-        return;
+    if (m_playbackController) {
+        connect(m_playbackController, &VideoPlaybackController::positionChanged, this, &VideoPlayerController::positionChanged);
+        connect(m_playbackController, &VideoPlaybackController::positionChanged, this, [this](qint64 position) {
+            if (m_danmakuCoordinator) {
+                m_danmakuCoordinator->syncToPosition(position);
+            }
+        });
+        connect(m_playbackController, &VideoPlaybackController::durationChanged, this, &VideoPlayerController::onDurationChanged);
+        connect(m_playbackController,
+                &VideoPlaybackController::playbackStateChanged,
+                this,
+                &VideoPlayerController::onPlaybackStateChanged);
+        connect(m_playbackController,
+                &VideoPlaybackController::mediaStatusChanged,
+                this,
+                &VideoPlayerController::onMediaStatusChanged);
+        connect(m_playbackController,
+                &VideoPlaybackController::playbackError,
+                this,
+                &VideoPlayerController::onPlayerError);
     }
-
-    connect(player, &QMediaPlayer::positionChanged, this, &VideoPlayerController::positionChanged);
-    connect(player, &QMediaPlayer::positionChanged, this, [this](qint64 position) {
-        if (m_danmakuCoordinator) {
-            m_danmakuCoordinator->syncToPosition(position);
-        }
-    });
-    connect(player, &QMediaPlayer::durationChanged, this, &VideoPlayerController::onDurationChanged);
-    connect(player,
-            &QMediaPlayer::playbackStateChanged,
-            this,
-            &VideoPlayerController::onPlaybackStateChanged);
-    connect(player,
-            &QMediaPlayer::mediaStatusChanged,
-            this,
-            &VideoPlayerController::onMediaStatusChanged);
-    connect(player, &QMediaPlayer::errorOccurred, this, &VideoPlayerController::onPlayerError);
 
 }
 
@@ -401,18 +408,17 @@ void VideoPlayerController::jump(bool forward, int ms)
 
 void VideoPlayerController::seekToPosition(qint64 positionValue)
 {
-    QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
-    if (!player) {
+    if (!m_playbackController) {
         return;
     }
 
     qint64 boundedPosition = qMax<qint64>(0, positionValue);
-    const qint64 durationValue = player->duration();
+    const qint64 durationValue = m_playbackController->duration();
     if (durationValue > 0) {
         boundedPosition = qBound<qint64>(0, boundedPosition, durationValue);
     }
 
-    player->setPosition(boundedPosition);
+    m_playbackController->seek(boundedPosition);
     emit positionChanged(boundedPosition);
 
     if (m_danmakuCoordinator) {
@@ -483,14 +489,12 @@ void VideoPlayerController::play()
 
 qint64 VideoPlayerController::position() const
 {
-    const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
-    return player ? player->position() : 0;
+    return m_playbackController ? m_playbackController->position() : 0;
 }
 
 qint64 VideoPlayerController::duration() const
 {
-    const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
-    return player ? player->duration() : 0;
+    return m_playbackController ? m_playbackController->duration() : 0;
 }
 
 QString VideoPlayerController::currentVideoPath() const
@@ -656,9 +660,9 @@ void VideoPlayerController::onOnlinePlaybackResolveFailed(const QString& message
                           withOnlineVideoRetryHint(failureMessage));
 }
 
-void VideoPlayerController::onPlaybackStateChanged(QMediaPlayer::PlaybackState state)
+void VideoPlayerController::onPlaybackStateChanged(IPlaybackBackend::PlaybackState state)
 {
-    const bool playing = state == QMediaPlayer::PlayingState;
+    const bool playing = state == IPlaybackBackend::PlaybackState::Playing;
     emit playbackStateChanged(playing);
 
     if (playing) {
@@ -669,7 +673,7 @@ void VideoPlayerController::onPlaybackStateChanged(QMediaPlayer::PlaybackState s
         return;
     }
 
-    if (state == QMediaPlayer::StoppedState) {
+    if (state == IPlaybackBackend::PlaybackState::Stopped) {
         m_saveTimer->stop();
         if (!m_historyCoordinator || !m_historyCoordinator->completionSaved()) {
             saveCurrentProgress();
@@ -683,7 +687,7 @@ void VideoPlayerController::onPlaybackStateChanged(QMediaPlayer::PlaybackState s
         return;
     }
 
-    if (state == QMediaPlayer::PausedState) {
+    if (state == IPlaybackBackend::PlaybackState::Paused) {
         m_saveTimer->stop();
         if (m_danmakuCoordinator) {
             m_danmakuCoordinator->onPlaybackPaused();
@@ -699,13 +703,13 @@ void VideoPlayerController::onDurationChanged(qint64 durationValue)
     }
 }
 
-void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
+void VideoPlayerController::onMediaStatusChanged(IPlaybackBackend::MediaStatus status)
 {
     if (isReadyForDeferredSeek(status)) {
         tryApplyPendingSeek(status);
     }
 
-    if (status == QMediaPlayer::EndOfMedia) {
+    if (status == IPlaybackBackend::MediaStatus::EndOfMedia) {
         m_saveTimer->stop();
         if (m_historyCoordinator) {
             m_historyCoordinator->saveCompletedProgress(position(), duration());
@@ -717,14 +721,16 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
         return;
     }
 
-    if (status == QMediaPlayer::InvalidMedia) {
+    if (status == IPlaybackBackend::MediaStatus::InvalidMedia) {
         if (m_playbackController) {
             m_playbackController->stop();
         }
         const bool localFile = !m_currentVideoPath.trimmed().isEmpty();
         if (localFile) {
             const LocalPlaybackDiagnosis diagnosis =
-                LocalPlaybackDiagnostics::diagnose(m_currentVideoPath, QMediaPlayer::FormatError, QString());
+                LocalPlaybackDiagnostics::diagnose(m_currentVideoPath,
+                                                   IPlaybackBackend::PlaybackError::FormatError,
+                                                   QString());
             emit warningRequested(diagnosis.title, diagnosis.message);
             if (playNextQueuedVideo()) {
                 return;
@@ -739,9 +745,9 @@ void VideoPlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus statu
     }
 }
 
-void VideoPlayerController::onPlayerError(QMediaPlayer::Error error, const QString& errorString)
+void VideoPlayerController::onPlayerError(IPlaybackBackend::PlaybackError error, const QString& errorString)
 {
-    if (error == QMediaPlayer::NoError) {
+    if (error == IPlaybackBackend::PlaybackError::NoError) {
         return;
     }
 
@@ -836,22 +842,21 @@ void VideoPlayerController::schedulePendingSeek(qint64 positionValue,
     m_pendingHighlightPosition = highlightPosition;
     m_pendingSeekMode = mode;
 
-    const QMediaPlayer* player = m_playbackController ? m_playbackController->player() : nullptr;
-    if (!player) {
+    if (!m_playbackController) {
         return;
     }
 
-    tryApplyPendingSeek(player->mediaStatus());
+    tryApplyPendingSeek(m_playbackController->mediaStatus());
 }
 
-void VideoPlayerController::tryApplyPendingSeek(QMediaPlayer::MediaStatus status)
+void VideoPlayerController::tryApplyPendingSeek(IPlaybackBackend::MediaStatus status)
 {
     if (!isReadyForDeferredSeek(status) || m_pendingSeekMode == PendingSeekMode::None) {
         return;
     }
 
     if (m_pendingSeekMode == PendingSeekMode::Resume
-        && status == QMediaPlayer::LoadedMedia
+        && status == IPlaybackBackend::MediaStatus::Loaded
         && duration() <= 0) {
         return;
     }

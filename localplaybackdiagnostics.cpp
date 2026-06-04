@@ -102,7 +102,7 @@ QString suggestionForKind(LocalPlaybackFailureKind kind)
     return QString();
 }
 
-LocalPlaybackFailureKind kindFromBackendError(QMediaPlayer::Error error, const QString& errorString)
+LocalPlaybackFailureKind kindFromBackendError(IPlaybackBackend::PlaybackError error, const QString& errorString)
 {
     const QString lowerError = errorString.toLower();
     if (containsAny(lowerError,
@@ -135,14 +135,15 @@ LocalPlaybackFailureKind kindFromBackendError(QMediaPlayer::Error error, const Q
     }
 
     switch (error) {
-    case QMediaPlayer::AccessDeniedError:
+    case IPlaybackBackend::PlaybackError::AccessDeniedError:
         return LocalPlaybackFailureKind::FileNotReadable;
-    case QMediaPlayer::FormatError:
+    case IPlaybackBackend::PlaybackError::FormatError:
         return LocalPlaybackFailureKind::UnsupportedCodec;
-    case QMediaPlayer::ResourceError:
+    case IPlaybackBackend::PlaybackError::ResourceError:
         return LocalPlaybackFailureKind::DamagedFile;
-    case QMediaPlayer::NoError:
-    case QMediaPlayer::NetworkError:
+    case IPlaybackBackend::PlaybackError::NoError:
+    case IPlaybackBackend::PlaybackError::NetworkError:
+    case IPlaybackBackend::PlaybackError::UnknownError:
         break;
     }
 
@@ -187,7 +188,7 @@ QString LocalPlaybackDiagnostics::quickProbeStatusMessage(int acceptedFileCount)
 }
 
 LocalPlaybackDiagnosis LocalPlaybackDiagnostics::diagnose(const QString& filePath,
-                                                          QMediaPlayer::Error error,
+                                                          IPlaybackBackend::PlaybackError error,
                                                           const QString& errorString)
 {
     LocalPlaybackFailureKind kind = LocalPlaybackFailureKind::Unknown;

@@ -41,6 +41,24 @@ bool isPlayableRemoteUrl(const QUrl& url)
         && !url.host().isEmpty();
 }
 
+IPlaybackBackend::PlaybackError toPlaybackError(QMediaPlayer::Error error)
+{
+    switch (error) {
+    case QMediaPlayer::NoError:
+        return IPlaybackBackend::PlaybackError::NoError;
+    case QMediaPlayer::ResourceError:
+        return IPlaybackBackend::PlaybackError::ResourceError;
+    case QMediaPlayer::FormatError:
+        return IPlaybackBackend::PlaybackError::FormatError;
+    case QMediaPlayer::NetworkError:
+        return IPlaybackBackend::PlaybackError::NetworkError;
+    case QMediaPlayer::AccessDeniedError:
+        return IPlaybackBackend::PlaybackError::AccessDeniedError;
+    }
+
+    return IPlaybackBackend::PlaybackError::UnknownError;
+}
+
 QString playbackErrorCategory(QMediaPlayer::Error error)
 {
     switch (error) {
@@ -127,14 +145,14 @@ QString localPlaybackErrorTitle(const QString& filePath,
                                 QMediaPlayer::Error error,
                                 const QString& errorString)
 {
-    return LocalPlaybackDiagnostics::diagnose(filePath, error, errorString).title;
+    return LocalPlaybackDiagnostics::diagnose(filePath, toPlaybackError(error), errorString).title;
 }
 
 QString localPlaybackErrorMessage(const QString& filePath,
                                   QMediaPlayer::Error error,
                                   const QString& errorString)
 {
-    return LocalPlaybackDiagnostics::diagnose(filePath, error, errorString).message;
+    return LocalPlaybackDiagnostics::diagnose(filePath, toPlaybackError(error), errorString).message;
 }
 
 [[maybe_unused]] QString quickProbeNotice()
@@ -538,7 +556,9 @@ void AudioPlayerController::handleMediaStatusChanged(int status)
         if (!isOnlineTrack && m_playlistModel && m_playlistModel->hasCurrent()) {
             const QString filePath = m_playlistModel->currentTrack().url.toLocalFile();
             const LocalPlaybackDiagnosis diagnosis =
-                LocalPlaybackDiagnostics::diagnose(filePath, QMediaPlayer::FormatError, QString());
+                LocalPlaybackDiagnostics::diagnose(filePath,
+                                                   IPlaybackBackend::PlaybackError::FormatError,
+                                                   QString());
             markCurrentTrackFailed(diagnosis.message);
             emit warningRequested(diagnosis.title, diagnosis.message);
             return;

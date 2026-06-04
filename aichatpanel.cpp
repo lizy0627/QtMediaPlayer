@@ -2,9 +2,9 @@
 
 #include "aichatwidget.h"
 
-#include <QVideoWidget>
+#include <QWidget>
 
-AiChatPanel::AiChatPanel(QVideoWidget* videoWidget, QWidget* parentWidget, QObject* parent)
+AiChatPanel::AiChatPanel(QWidget* videoWidget, QWidget* parentWidget, QObject* parent)
     : QObject(parent)
 {
     m_widget = new AiChatWidget(videoWidget, parentWidget);

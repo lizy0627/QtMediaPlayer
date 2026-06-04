@@ -4,9 +4,14 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QStackedLayout>
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <QVideoWidget>
+
+#ifdef USE_FFMPEG
+#include "ffmpeg/ffmpegvideowidget.h"
+#endif
 
 #include "aichatpanel.h"
 #include "aichatwidget.h"
@@ -26,6 +31,80 @@
 #include "videoplaybackcontroller.h"
 #include "videoplayercontroller.h"
 #include "videoqueuedialog.h"
+
+class VideoRenderContainer : public QWidget
+{
+public:
+    enum class Renderer {
+        QtVideo,
+        FFmpegVideo
+    };
+
+    explicit VideoRenderContainer(QWidget* parent = nullptr)
+        : QWidget(parent)
+        , m_stack(new QStackedLayout(this))
+        , m_qtVideoWidget(new QVideoWidget(this))
+    {
+        setStyleSheet("background: black;");
+        m_stack->setContentsMargins(0, 0, 0, 0);
+        m_stack->setSpacing(0);
+
+        m_qtVideoWidget->setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            " stop:0 rgba(26, 32, 44, 1),"
+            " stop:0.5 rgba(45, 55, 72, 1),"
+            " stop:1 rgba(26, 32, 44, 1));");
+        m_stack->addWidget(m_qtVideoWidget);
+
+#ifdef USE_FFMPEG
+        m_ffmpegVideoWidget = new FFmpegVideoWidget(this);
+        m_stack->addWidget(m_ffmpegVideoWidget);
+#endif
+
+        setRenderer(Renderer::QtVideo);
+    }
+
+    QVideoWidget* qtVideoWidget() const
+    {
+        return m_qtVideoWidget;
+    }
+
+#ifdef USE_FFMPEG
+    FFmpegVideoWidget* ffmpegVideoWidget() const
+    {
+        return m_ffmpegVideoWidget;
+    }
+#endif
+
+    void setRenderer(Renderer renderer)
+    {
+        if (renderer == Renderer::FFmpegVideo) {
+#ifdef USE_FFMPEG
+            if (m_ffmpegVideoWidget != nullptr) {
+                m_stack->setCurrentWidget(m_ffmpegVideoWidget);
+                m_renderer = renderer;
+                return;
+            }
+#endif
+        }
+
+        m_stack->setCurrentWidget(m_qtVideoWidget);
+        m_renderer = Renderer::QtVideo;
+    }
+
+    Renderer renderer() const
+    {
+        return m_renderer;
+    }
+
+private:
+    QStackedLayout* m_stack = nullptr;
+    QVideoWidget* m_qtVideoWidget = nullptr;
+#ifdef USE_FFMPEG
+    FFmpegVideoWidget* m_ffmpegVideoWidget = nullptr;
+#endif
+    Renderer m_renderer = Renderer::QtVideo;
+};
 
 VideoPlayerWidget::VideoPlayerWidget(QWidget* parent,
                                      UserSession* userSession,
@@ -176,6 +255,42 @@ bool VideoPlayerWidget::showMediaInfo()
     return true;
 }
 
+void VideoPlayerWidget::setUseFFmpegBackend(bool enabled)
+{
+#ifdef USE_FFMPEG
+    if (!m_playbackController || !m_videoSurface) {
+        return;
+    }
+
+    m_videoSurface->setRenderer(enabled
+                                    ? VideoRenderContainer::Renderer::FFmpegVideo
+                                    : VideoRenderContainer::Renderer::QtVideo);
+    m_playbackController->setBackendType(enabled
+                                             ? VideoPlaybackController::BackendType::FFmpeg
+                                             : VideoPlaybackController::BackendType::QtMedia);
+    m_playbackController->setVideoOutput(m_video);
+    m_playbackController->setFrameOutput(m_videoSurface->ffmpegVideoWidget());
+    if (m_danmakuWidget) {
+        m_danmakuWidget->raise();
+    }
+    if (m_danmakuController) {
+        m_danmakuController->setOverlayGeometry(m_videoContainer->rect());
+    }
+#else
+    Q_UNUSED(enabled)
+#endif
+}
+
+bool VideoPlayerWidget::isUsingFFmpegBackend() const
+{
+#ifdef USE_FFMPEG
+    return m_playbackController
+        && m_playbackController->backendType() == VideoPlaybackController::BackendType::FFmpeg;
+#else
+    return false;
+#endif
+}
+
 void VideoPlayerWidget::showError(const QString& message)
 {
     QMessageBox::critical(m_parent, QStringLiteral("播放错误"), message);
@@ -255,11 +370,11 @@ bool VideoPlayerWidget::eventFilter(QObject* watched, QEvent* event)
 {
     if ((watched == m_video || watched == m_videoContainer)
         && m_danmakuController
-        && m_video
+        && m_videoContainer
         && (event->type() == QEvent::Resize
             || event->type() == QEvent::Show
             || event->type() == QEvent::Move)) {
-        m_danmakuController->setOverlayGeometry(m_video->rect());
+        m_danmakuController->setOverlayGeometry(m_videoContainer->rect());
     }
 
     return QObject::eventFilter(watched, event);
@@ -277,24 +392,14 @@ void VideoPlayerWidget::createLayout()
         "QSplitter::handle { background: rgba(102, 126, 234, 0.3); }"
         "QSplitter::handle:hover { background: rgba(102, 126, 234, 0.6); }");
 
-    m_videoContainer = new QWidget(m_parent);
-    m_videoContainer->setStyleSheet("background: black;");
-    QVBoxLayout* videoLayout = new QVBoxLayout(m_videoContainer);
-    videoLayout->setContentsMargins(0, 0, 0, 0);
-    videoLayout->setSpacing(0);
-
-    m_video = new QVideoWidget(m_videoContainer);
-    m_video->setStyleSheet(
-        "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
-        " stop:0 rgba(26, 32, 44, 1),"
-        " stop:0.5 rgba(45, 55, 72, 1),"
-        " stop:1 rgba(26, 32, 44, 1));");
-    videoLayout->addWidget(m_video);
+    m_videoSurface = new VideoRenderContainer(m_parent);
+    m_videoContainer = m_videoSurface;
+    m_video = m_videoSurface->qtVideoWidget();
 
     m_danmakuDisplay = new DanmakuPanel(m_parent);
     m_danmakuDisplay->setMinimumWidth(300);
 
-    m_aiChatPanel = new AiChatPanel(m_video, m_parent, this);
+    m_aiChatPanel = new AiChatPanel(m_videoContainer, m_parent, this);
     m_aiChatWidget = m_aiChatPanel->widget();
     m_aiChatWidget->hide();
 
@@ -320,19 +425,24 @@ void VideoPlayerWidget::createServices()
 {
     m_playbackController = new VideoPlaybackController(this);
     m_playbackController->setVideoOutput(m_video);
+#ifdef USE_FFMPEG
+    if (m_videoSurface) {
+        m_playbackController->setFrameOutput(m_videoSurface->ffmpegVideoWidget());
+    }
+#endif
 
     if (!m_historyService) {
         m_historyService = new MediaHistoryService(this);
     }
-    m_captureService = new CaptureService(m_video, this);
+    m_captureService = new CaptureService(m_videoContainer, this);
     if (m_aiChatPanel) {
         m_aiChatPanel->setCaptureService(m_captureService);
     }
     m_onlineVideoService = new OnlineVideoService(this);
     m_danmakuRepository = new DanmakuRepository();
 
-    m_danmakuWidget = new DanmakuOverlay(m_video);
-    m_danmakuWidget->setGeometry(m_video->rect());
+    m_danmakuWidget = new DanmakuOverlay(m_videoContainer);
+    m_danmakuWidget->setGeometry(m_videoContainer->rect());
     m_danmakuWidget->raise();
     m_danmakuWidget->show();
     m_danmakuWidget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
@@ -399,6 +509,28 @@ void VideoPlayerWidget::connectSignals()
     connect(m_controller, &VideoPlayerController::playbackError, this, &VideoPlayerWidget::showError);
     connect(m_controller, &VideoPlayerController::warningRequested, this, &VideoPlayerWidget::showWarning);
     connect(m_controller, &VideoPlayerController::infoRequested, this, &VideoPlayerWidget::showInfo);
+
+#ifdef USE_FFMPEG
+    connect(m_playbackController,
+            &VideoPlaybackController::backendTypeChanged,
+            this,
+            [this](VideoPlaybackController::BackendType backendType) {
+                if (m_videoSurface == nullptr) {
+                    return;
+                }
+
+                m_videoSurface->setRenderer(
+                    backendType == VideoPlaybackController::BackendType::FFmpeg
+                        ? VideoRenderContainer::Renderer::FFmpegVideo
+                        : VideoRenderContainer::Renderer::QtVideo);
+                if (m_danmakuWidget) {
+                    m_danmakuWidget->raise();
+                }
+                if (m_danmakuController) {
+                    m_danmakuController->setOverlayGeometry(m_videoContainer->rect());
+                }
+            });
+#endif
 
     connect(m_captureService, &CaptureService::screenshotSaved, this, &VideoPlayerWidget::showScreenshotResult);
     connect(m_captureService, &CaptureService::captureFailed, this, [this](const QString& message) {

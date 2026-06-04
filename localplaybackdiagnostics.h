@@ -1,8 +1,9 @@
 #ifndef LOCALPLAYBACKDIAGNOSTICS_H
 #define LOCALPLAYBACKDIAGNOSTICS_H
 
-#include <QMediaPlayer>
 #include <QString>
+
+#include "playback/iplaybackbackend.h"
 
 enum class LocalPlaybackFailureKind {
     FileMissing,
@@ -27,7 +28,7 @@ public:
     static QString quickProbeNotice();
     static QString quickProbeStatusMessage(int acceptedFileCount);
     static LocalPlaybackDiagnosis diagnose(const QString& filePath,
-                                           QMediaPlayer::Error error,
+                                           IPlaybackBackend::PlaybackError error,
                                            const QString& errorString);
 };
 
