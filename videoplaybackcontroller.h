@@ -23,6 +23,12 @@ public:
     };
     Q_ENUM(BackendType)
 
+    enum class LocalFileBackendPolicy {
+        PreferQtMedia,
+        PreferFFmpeg
+    };
+    Q_ENUM(LocalFileBackendPolicy)
+
     explicit VideoPlaybackController(QObject* parent = nullptr,
                                      BackendType backendType = BackendType::QtMedia);
 
@@ -31,6 +37,8 @@ public:
 
     void setBackendType(BackendType backendType);
     BackendType backendType() const;
+    void setLocalFileBackendPolicy(LocalFileBackendPolicy policy);
+    LocalFileBackendPolicy localFileBackendPolicy() const;
     bool isFFmpegBackendAvailable() const;
     bool shouldUseFFmpegForLocalFile(const QString& filePath) const;
 
@@ -67,13 +75,23 @@ signals:
 private:
     IPlaybackBackend* createBackend(BackendType backendType);
     BackendType resolvedBackendType(BackendType backendType) const;
+    bool isFFmpegFallbackError(IPlaybackBackend::PlaybackError error) const;
+    bool tryFallbackToFFmpeg(IPlaybackBackend::PlaybackError error, const QString& message);
     void attachBackendSignals();
     void releaseBackend();
 
     IPlaybackBackend* m_backend = nullptr;
     BackendType m_backendType = BackendType::QtMedia;
+    LocalFileBackendPolicy m_localFileBackendPolicy = LocalFileBackendPolicy::PreferQtMedia;
     QVideoWidget* m_videoOutput = nullptr;
     FFmpegVideoWidget* m_frameOutput = nullptr;
+    QString m_currentLocalFilePath;
+    bool m_currentSourceIsLocalFile = false;
+    bool m_ffmpegFallbackAttempted = false;
+    bool m_playbackRequested = false;
+    bool m_fallbackPlaybackRequested = false;
+    qint64 m_lastKnownPosition = 0;
+    qint64 m_fallbackPosition = -1;
 };
 
 #endif // VIDEOPLAYBACKCONTROLLER_H

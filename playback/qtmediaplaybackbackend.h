@@ -38,11 +38,17 @@ private:
     static PlaybackState toBackendPlaybackState(int state);
     static MediaStatus toBackendMediaStatus(int status);
     static PlaybackError toBackendPlaybackError(int error);
+    void setPlaybackState(PlaybackState state, bool force = false);
+    void setMediaStatus(MediaStatus status, bool force = false);
+    void emitErrorOnce(PlaybackError error, const QString& message);
     qint64 boundedPosition(qint64 requestedPosition) const;
 
     QMediaPlayer* m_player = nullptr;
     QAudioOutput* m_audioOutput = nullptr;
     double m_playbackRate = 1.0;
+    PlaybackState m_playbackState = PlaybackState::Stopped;
+    MediaStatus m_mediaStatus = MediaStatus::NoMedia;
+    bool m_errorEmittedForCurrentMedia = false;
 };
 
 #endif // QTMEDIAPLAYBACKBACKEND_H

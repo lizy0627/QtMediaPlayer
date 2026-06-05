@@ -17,6 +17,7 @@ extern "C" {
 #include <QAudioFormat>
 #include <QAudioSink>
 #include <QByteArray>
+#include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
@@ -36,6 +37,7 @@ namespace {
 constexpr qint64 kVideoEarlyToleranceMs = 10;
 constexpr qint64 kVideoDropThresholdMs = 120;
 constexpr qint64 kVideoSyncWaitSliceMs = 10;
+constexpr qint64 kSeekPrerollToleranceMs = 15;
 
 enum class VideoSyncDecision {
     Display,
@@ -50,6 +52,34 @@ QString ffmpegErrorString(int errorCode)
         return QStringLiteral("FFmpeg error %1").arg(errorCode);
     }
     return QString::fromUtf8(buffer);
+}
+
+const char* failureCategory(const QString& message)
+{
+    if (message.contains(QStringLiteral("open input"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("stream info"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("playable video stream"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("File "), Qt::CaseSensitive)
+        || message.contains(QStringLiteral("Path "), Qt::CaseSensitive)) {
+        return "open";
+    }
+    if (message.contains(QStringLiteral("audio output"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("audio sink"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("audio output write"), Qt::CaseInsensitive)) {
+        return "audio-output";
+    }
+    if (message.contains(QStringLiteral("decoder"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("decoded"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("packet"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("resample"), Qt::CaseInsensitive)
+        || message.contains(QStringLiteral("frame"), Qt::CaseInsensitive)) {
+        return "decode";
+    }
+    if (message.contains(QStringLiteral("seek"), Qt::CaseInsensitive)) {
+        return "seek";
+    }
+
+    return "playback";
 }
 
 bool isAttachedPictureStream(const AVStream* stream)
@@ -73,6 +103,11 @@ void freeCodecContext(AVCodecContext* context)
     avcodec_free_context(&context);
 }
 
+void freeCodecParameters(AVCodecParameters* parameters)
+{
+    avcodec_parameters_free(&parameters);
+}
+
 void freePacket(AVPacket* packet)
 {
     av_packet_free(&packet);
@@ -93,6 +128,14 @@ void freeSwrContext(SwrContext* context)
     swr_free(&context);
 }
 
+void deleteAudioSink(QAudioSink* sink)
+{
+    if (sink != nullptr) {
+        sink->stop();
+        delete sink;
+    }
+}
+
 double rationalToDouble(AVRational rational)
 {
     if (rational.num <= 0 || rational.den <= 0) {
@@ -106,11 +149,11 @@ double rationalToDouble(AVRational rational)
     return value;
 }
 
-int streamFrameDelayMs(const AVStream* stream)
+int streamFrameDelayMs(AVRational avgFrameRate, AVRational rFrameRate)
 {
-    double fps = rationalToDouble(stream->avg_frame_rate);
+    double fps = rationalToDouble(avgFrameRate);
     if (fps <= 0.0) {
-        fps = rationalToDouble(stream->r_frame_rate);
+        fps = rationalToDouble(rFrameRate);
     }
     if (fps <= 0.0) {
         return 33;
@@ -119,13 +162,16 @@ int streamFrameDelayMs(const AVStream* stream)
     return qMax(1, static_cast<int>(std::lround(1000.0 / fps)));
 }
 
-qint64 frameTimestampMs(const AVFrame* frame, const AVStream* stream, qint64 fallbackMs)
+qint64 frameTimestampMs(const AVFrame* frame, AVRational timeBase, qint64 fallbackMs)
 {
-    if (frame == nullptr || stream == nullptr || frame->best_effort_timestamp == AV_NOPTS_VALUE) {
+    if (frame == nullptr
+        || timeBase.num <= 0
+        || timeBase.den <= 0
+        || frame->best_effort_timestamp == AV_NOPTS_VALUE) {
         return fallbackMs;
     }
 
-    return av_rescale_q(frame->best_effort_timestamp, stream->time_base, AVRational { 1, 1000 });
+    return av_rescale_q(frame->best_effort_timestamp, timeBase, AVRational { 1, 1000 });
 }
 
 bool preparePcmS16Format(const QAudioDevice& device,
@@ -263,7 +309,7 @@ void FFmpegPlaybackBackend::setFrameOutput(FFmpegVideoWidget* frameOutput)
                                     &FFmpegPlaybackBackend::videoFrameReady,
                                     m_frameOutput,
                                     &FFmpegVideoWidget::setFrame,
-                                    Qt::QueuedConnection);
+                                    Qt::DirectConnection);
     }
 }
 
@@ -271,21 +317,29 @@ void FFmpegPlaybackBackend::openLocalFile(const QString& filePath)
 {
     stopDecodeThread();
     closeInput();
-    m_filePath.clear();
+    m_filePath = filePath.trimmed();
     m_videoStreamIndex = -1;
     m_audioStreamIndex = -1;
     m_durationMs = 0;
     m_positionMs.store(0);
     m_audioClockMs.store(0);
     m_seekGeneration.store(0);
+    m_seekTargetMs.store(-1);
 
-    setMediaStatus(MediaStatus::Loading);
-    emit playbackStateChanged(PlaybackState::Stopped);
+    m_errorEmittedForCurrentMedia = false;
+    setMediaStatus(MediaStatus::Loading, true);
+    setPlaybackState(PlaybackState::Stopped);
+
+    qDebug() << "[FFmpegPlaybackBackend] openLocalFile"
+             << "file" << m_filePath;
 
     QString absoluteFilePath;
     if (!validateLocalFile(filePath, &absoluteFilePath)) {
         return;
     }
+    m_filePath = absoluteFilePath;
+    qDebug() << "[FFmpegPlaybackBackend] opening input"
+             << "file" << m_filePath;
 
     AVFormatContext* rawFormatContext = nullptr;
     const QByteArray encodedPath = absoluteFilePath.toUtf8();
@@ -333,12 +387,16 @@ void FFmpegPlaybackBackend::openLocalFile(const QString& filePath)
         return;
     }
 
-    m_filePath = absoluteFilePath;
     m_durationMs = formatDurationMs(m_formatContext);
 
     emit positionChanged(m_positionMs.load());
     emit durationChanged(m_durationMs);
     setMediaStatus(MediaStatus::Loaded);
+    qDebug() << "[FFmpegPlaybackBackend] loaded"
+             << "file" << m_filePath
+             << "durationMs" << m_durationMs
+             << "videoStream" << m_videoStreamIndex
+             << "audioStream" << m_audioStreamIndex;
 }
 
 void FFmpegPlaybackBackend::openUrl(const QUrl& url)
@@ -349,16 +407,28 @@ void FFmpegPlaybackBackend::openUrl(const QUrl& url)
 
 void FFmpegPlaybackBackend::play()
 {
-    if (m_formatContext == nullptr || m_videoStreamIndex < 0) {
+    bool hasInput = false;
+    {
+        std::lock_guard<std::mutex> lock(m_decodeIoMutex);
+        hasInput = m_formatContext != nullptr && m_videoStreamIndex >= 0;
+    }
+
+    if (!hasInput) {
         fail(QStringLiteral("No local video file is loaded."));
         return;
     }
 
+    qDebug() << "[FFmpegPlaybackBackend] play"
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load();
     startDecodeThread();
 }
 
 void FFmpegPlaybackBackend::pause()
 {
+    qDebug() << "[FFmpegPlaybackBackend] pause"
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load();
     if (m_decodeThread.joinable() && !m_decodeFinished.load()) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -367,52 +437,71 @@ void FFmpegPlaybackBackend::pause()
         m_isPlaying.store(false);
         m_stateChanged.notify_all();
     }
-    emit playbackStateChanged(PlaybackState::Paused);
+    setPlaybackState(PlaybackState::Paused);
 }
 
 void FFmpegPlaybackBackend::stop()
 {
+    qDebug() << "[FFmpegPlaybackBackend] stop"
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load();
     stopDecodeThread();
+    m_seekTargetMs.store(-1);
     m_positionMs.store(0);
     m_audioClockMs.store(0);
     emit positionChanged(m_positionMs.load());
-    emit playbackStateChanged(PlaybackState::Stopped);
+    setPlaybackState(PlaybackState::Stopped);
 }
 
 void FFmpegPlaybackBackend::seek(qint64 position)
 {
-    if (m_formatContext == nullptr || m_videoStreamIndex < 0) {
-        m_positionMs.store(boundedPosition(position));
-        m_audioClockMs.store(m_positionMs.load());
-        emit positionChanged(m_positionMs.load());
+    const qint64 targetPosition = boundedPosition(position);
+    int result = 0;
+    bool hasInput = false;
+
+    qDebug() << "[FFmpegPlaybackBackend] seek"
+             << "file" << m_filePath
+             << "fromMs" << m_positionMs.load()
+             << "toMs" << targetPosition
+             << "requestedMs" << position;
+
+    m_seekTargetMs.store(targetPosition);
+    m_seekGeneration.fetch_add(1);
+    m_stateChanged.notify_all();
+
+    {
+        std::lock_guard<std::mutex> lock(m_decodeIoMutex);
+        hasInput = m_formatContext != nullptr && m_videoStreamIndex >= 0;
+        if (hasInput) {
+            const int targetStreamIndex = seekStreamIndex();
+            const qint64 targetTimestamp = positionToStreamTimestamp(targetPosition, targetStreamIndex);
+            result = av_seek_frame(m_formatContext,
+                                   targetStreamIndex,
+                                   targetTimestamp,
+                                   AVSEEK_FLAG_BACKWARD);
+            if (result >= 0 && m_videoCodecContext != nullptr) {
+                avcodec_flush_buffers(m_videoCodecContext);
+            }
+            if (result >= 0 && m_audioCodecContext != nullptr) {
+                avcodec_flush_buffers(m_audioCodecContext);
+            }
+        }
+    }
+
+    if (!hasInput) {
+        m_positionMs.store(targetPosition);
+        m_audioClockMs.store(targetPosition);
+        m_seekTargetMs.store(-1);
+        emit positionChanged(targetPosition);
         return;
     }
 
-    const qint64 targetPosition = boundedPosition(position);
-    const int targetStreamIndex = seekStreamIndex();
-
-    int result = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_decodeIoMutex);
-        const qint64 targetTimestamp = positionToStreamTimestamp(targetPosition, targetStreamIndex);
-        result = av_seek_frame(m_formatContext,
-                               targetStreamIndex,
-                               targetTimestamp,
-                               AVSEEK_FLAG_BACKWARD);
-        if (result >= 0 && m_videoCodecContext != nullptr) {
-            avcodec_flush_buffers(m_videoCodecContext);
-        }
-        if (result >= 0 && m_audioCodecContext != nullptr) {
-            avcodec_flush_buffers(m_audioCodecContext);
-        }
-    }
-
     if (result < 0) {
+        m_seekTargetMs.store(-1);
         fail(QStringLiteral("FFmpeg seek failed: %1").arg(ffmpegErrorString(result)));
         return;
     }
 
-    m_seekGeneration.fetch_add(1);
     m_positionMs.store(targetPosition);
     m_audioClockMs.store(targetPosition);
     emit positionChanged(targetPosition);
@@ -452,17 +541,14 @@ qint64 FFmpegPlaybackBackend::duration() const
 
 IPlaybackBackend::MediaStatus FFmpegPlaybackBackend::mediaStatus() const
 {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     return m_mediaStatus;
 }
 
 IPlaybackBackend::PlaybackState FFmpegPlaybackBackend::playbackState() const
 {
-    if (m_isPlaying.load()) {
-        return PlaybackState::Playing;
-    }
-
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    return m_pauseRequested ? PlaybackState::Paused : PlaybackState::Stopped;
+    return m_playbackState;
 }
 
 bool FFmpegPlaybackBackend::isPlaying() const
@@ -481,7 +567,7 @@ void FFmpegPlaybackBackend::startDecodeThread()
         }
         m_isPlaying.store(true);
         m_stateChanged.notify_all();
-        emit playbackStateChanged(PlaybackState::Playing);
+        setPlaybackState(PlaybackState::Playing);
         return;
     }
 
@@ -494,7 +580,7 @@ void FFmpegPlaybackBackend::startDecodeThread()
     m_decodeFinished.store(false);
     m_isPlaying.store(true);
     m_decodeThread = std::thread(&FFmpegPlaybackBackend::decodeLoop, this);
-    emit playbackStateChanged(PlaybackState::Playing);
+    setPlaybackState(PlaybackState::Playing);
 }
 
 void FFmpegPlaybackBackend::stopDecodeThread()
@@ -506,8 +592,14 @@ void FFmpegPlaybackBackend::stopDecodeThread()
     }
     m_stateChanged.notify_all();
 
-    if (m_decodeThread.joinable()) {
+    const bool calledFromDecodeThread = m_decodeThread.joinable()
+        && std::this_thread::get_id() == m_decodeThread.get_id();
+    if (m_decodeThread.joinable() && !calledFromDecodeThread) {
         m_decodeThread.join();
+    }
+
+    if (calledFromDecodeThread) {
+        return;
     }
 
     m_decodeFinished.store(false);
@@ -558,15 +650,82 @@ bool FFmpegPlaybackBackend::waitFrameInterval(int delayMs)
 
 void FFmpegPlaybackBackend::decodeLoop()
 {
+    qDebug() << "[FFmpegPlaybackBackend] decode started"
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load();
+
     bool reachedEnd = false;
-    const AVStream* videoStream = m_formatContext->streams[m_videoStreamIndex];
-    const AVCodecParameters* videoCodecParameters = videoStream->codecpar;
+    std::unique_ptr<AVCodecParameters, decltype(&freeCodecParameters)> videoCodecParameters(
+        avcodec_parameters_alloc(),
+        freeCodecParameters);
+    if (!videoCodecParameters) {
+        fail(QStringLiteral("FFmpeg failed to allocate video stream parameters."));
+        m_isPlaying.store(false);
+        m_decodeFinished.store(true);
+        setPlaybackState(PlaybackState::Stopped);
+        return;
+    }
+
+    std::unique_ptr<AVCodecParameters, decltype(&freeCodecParameters)> audioCodecParameters(nullptr,
+                                                                                            freeCodecParameters);
+    int localVideoStreamIndex = -1;
+    int localAudioStreamIndex = -1;
+    bool hasAudioStream = false;
+    AVRational videoTimeBase = { 0, 1 };
+    AVRational videoAvgFrameRate = { 0, 1 };
+    AVRational videoRFrameRate = { 0, 1 };
+    AVRational audioTimeBase = { 0, 1 };
+
+    int result = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_decodeIoMutex);
+        localVideoStreamIndex = m_videoStreamIndex;
+        localAudioStreamIndex = m_audioStreamIndex;
+        if (m_formatContext == nullptr
+            || localVideoStreamIndex < 0
+            || static_cast<unsigned int>(localVideoStreamIndex) >= m_formatContext->nb_streams
+            || m_formatContext->streams[localVideoStreamIndex] == nullptr
+            || m_formatContext->streams[localVideoStreamIndex]->codecpar == nullptr) {
+            result = AVERROR_INVALIDDATA;
+        } else {
+            const AVStream* videoStream = m_formatContext->streams[localVideoStreamIndex];
+            result = avcodec_parameters_copy(videoCodecParameters.get(), videoStream->codecpar);
+            videoTimeBase = videoStream->time_base;
+            videoAvgFrameRate = videoStream->avg_frame_rate;
+            videoRFrameRate = videoStream->r_frame_rate;
+        }
+
+        if (result >= 0
+            && localAudioStreamIndex >= 0
+            && static_cast<unsigned int>(localAudioStreamIndex) < m_formatContext->nb_streams
+            && m_formatContext->streams[localAudioStreamIndex] != nullptr
+            && m_formatContext->streams[localAudioStreamIndex]->codecpar != nullptr) {
+            audioCodecParameters.reset(avcodec_parameters_alloc());
+            if (!audioCodecParameters) {
+                result = AVERROR(ENOMEM);
+            } else {
+                const AVStream* audioStream = m_formatContext->streams[localAudioStreamIndex];
+                result = avcodec_parameters_copy(audioCodecParameters.get(), audioStream->codecpar);
+                audioTimeBase = audioStream->time_base;
+                hasAudioStream = result >= 0;
+            }
+        }
+    }
+
+    if (result < 0) {
+        fail(QStringLiteral("FFmpeg failed to read stream parameters: %1").arg(ffmpegErrorString(result)));
+        m_isPlaying.store(false);
+        m_decodeFinished.store(true);
+        setPlaybackState(PlaybackState::Stopped);
+        return;
+    }
+
     const AVCodec* videoDecoder = avcodec_find_decoder(videoCodecParameters->codec_id);
     if (videoDecoder == nullptr) {
         fail(QStringLiteral("FFmpeg did not find a decoder for the video stream."));
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
@@ -577,16 +736,16 @@ void FFmpegPlaybackBackend::decodeLoop()
         fail(QStringLiteral("FFmpeg failed to allocate video decoder context."));
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
-    int result = avcodec_parameters_to_context(videoCodecContext.get(), videoCodecParameters);
+    result = avcodec_parameters_to_context(videoCodecContext.get(), videoCodecParameters.get());
     if (result < 0) {
         fail(QStringLiteral("FFmpeg failed to configure video decoder: %1").arg(ffmpegErrorString(result)));
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
@@ -595,28 +754,26 @@ void FFmpegPlaybackBackend::decodeLoop()
         fail(QStringLiteral("FFmpeg failed to open video decoder: %1").arg(ffmpegErrorString(result)));
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
-    const bool hasAudioStream = m_audioStreamIndex >= 0;
-    const AVStream* audioStream = hasAudioStream ? m_formatContext->streams[m_audioStreamIndex] : nullptr;
     std::unique_ptr<AVCodecContext, decltype(&freeCodecContext)> audioCodecContext(nullptr, freeCodecContext);
     std::unique_ptr<SwrContext, decltype(&freeSwrContext)> swrContext(nullptr, freeSwrContext);
-    std::unique_ptr<QAudioSink> audioSink;
+    std::unique_ptr<QAudioSink, decltype(&deleteAudioSink)> audioSink(nullptr, deleteAudioSink);
     QIODevice* audioDevice = nullptr;
     QAudioFormat audioFormat;
     bool audioClockStarted = false;
     qint64 audioClockBaseUs = boundedPosition(m_positionMs.load()) * 1000;
     qint64 audioSubmittedUntilUs = audioClockBaseUs;
 
-    if (hasAudioStream && audioStream != nullptr && audioStream->codecpar != nullptr) {
-        const AVCodec* audioDecoder = avcodec_find_decoder(audioStream->codecpar->codec_id);
+    if (hasAudioStream && audioCodecParameters) {
+        const AVCodec* audioDecoder = avcodec_find_decoder(audioCodecParameters->codec_id);
         if (audioDecoder == nullptr) {
             fail(QStringLiteral("FFmpeg did not find a decoder for the audio stream."));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
@@ -625,16 +782,16 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(QStringLiteral("FFmpeg failed to allocate audio decoder context."));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
-        result = avcodec_parameters_to_context(audioCodecContext.get(), audioStream->codecpar);
+        result = avcodec_parameters_to_context(audioCodecContext.get(), audioCodecParameters.get());
         if (result < 0) {
             fail(QStringLiteral("FFmpeg failed to configure audio decoder: %1").arg(ffmpegErrorString(result)));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
@@ -643,7 +800,7 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(QStringLiteral("FFmpeg failed to open audio decoder: %1").arg(ffmpegErrorString(result)));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
@@ -656,7 +813,7 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(audioFormatError);
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
@@ -687,7 +844,7 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(QStringLiteral("FFmpeg failed to configure audio resampler: %1").arg(ffmpegErrorString(result)));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
         swrContext.reset(rawSwrContext);
@@ -697,11 +854,11 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(QStringLiteral("FFmpeg failed to initialize audio resampler: %1").arg(ffmpegErrorString(result)));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
 
-        audioSink = std::make_unique<QAudioSink>(outputDevice, audioFormat);
+        audioSink.reset(new QAudioSink(outputDevice, audioFormat));
         audioSink->setBufferSize(qMax<qsizetype>(audioFormat.bytesForDuration(120000),
                                                  audioFormat.bytesPerFrame() * 2048));
         audioSink->setVolume(qBound(0, m_volume.load(), 100) / 100.0);
@@ -710,7 +867,7 @@ void FFmpegPlaybackBackend::decodeLoop()
             fail(QStringLiteral("Qt failed to start audio output."));
             m_isPlaying.store(false);
             m_decodeFinished.store(true);
-            emit playbackStateChanged(PlaybackState::Stopped);
+            setPlaybackState(PlaybackState::Stopped);
             return;
         }
     }
@@ -725,9 +882,10 @@ void FFmpegPlaybackBackend::decodeLoop()
     result = 0;
     if (startPosition > 0) {
         std::lock_guard<std::mutex> lock(m_decodeIoMutex);
+        const int targetStreamIndex = localVideoStreamIndex >= 0 ? localVideoStreamIndex : localAudioStreamIndex;
         result = av_seek_frame(m_formatContext,
-                               seekStreamIndex(),
-                               positionToStreamTimestamp(startPosition, seekStreamIndex()),
+                               targetStreamIndex,
+                               positionToStreamTimestamp(startPosition, targetStreamIndex),
                                AVSEEK_FLAG_BACKWARD);
         if (result >= 0) {
             avcodec_flush_buffers(videoCodecContext.get());
@@ -749,7 +907,7 @@ void FFmpegPlaybackBackend::decodeLoop()
         }
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
@@ -770,17 +928,20 @@ void FFmpegPlaybackBackend::decodeLoop()
         }
         m_isPlaying.store(false);
         m_decodeFinished.store(true);
-        emit playbackStateChanged(PlaybackState::Stopped);
+        setPlaybackState(PlaybackState::Stopped);
         return;
     }
 
-    const int frameDelayMs = streamFrameDelayMs(videoStream);
+    const int frameDelayMs = streamFrameDelayMs(videoAvgFrameRate, videoRFrameRate);
     quint64 localSeekGeneration = m_seekGeneration.load();
+    qint64 localAudioSeekTargetMs = m_seekTargetMs.load();
+    qint64 localVideoSeekTargetMs = localAudioSeekTargetMs;
     int appliedVolume = -1;
 
     auto updateAudioClock = [&]() {
         if (audioSink && audioClockStarted) {
-            // audio clock = 宸叉彁浜ょ粰 QAudioSink 鐨勯煶棰戠粓鐐?- 浠嶅湪澹板崱缂撳啿鍖轰腑鐨勯煶棰戞椂闀裤�?            // 杩欎釜 clock 璺熺湡瀹炴挱鏀捐繘搴︾粦瀹氾紱pause 鏃剁紦鍐插尯涓嶅啀娑堣�楋紝鎵�浠?resume 鍚庝笉浼氬嚟绌鸿烦鍙樸�?            const qsizetype pendingBytes = qMax<qsizetype>(0, audioSink->bufferSize() - audioSink->bytesFree());
+            // audio clock = 已提交给 QAudioSink 的音频终点 - 仍在声卡缓冲区中的音频时长。
+            const qsizetype pendingBytes = qMax<qsizetype>(0, audioSink->bufferSize() - audioSink->bytesFree());
             const qint64 pendingUs = audioFormat.durationForBytes(static_cast<qint32>(pendingBytes));
             const qint64 clockUs = qBound(audioClockBaseUs,
                                           audioSubmittedUntilUs - pendingUs,
@@ -806,13 +967,17 @@ void FFmpegPlaybackBackend::decodeLoop()
             audioDevice = audioSink->start();
         }
         if (swrContext) {
+            swr_close(swrContext.get());
             swr_init(swrContext.get());
         }
         audioClockStarted = false;
         audioClockBaseUs = boundedPosition(m_positionMs.load()) * 1000;
         audioSubmittedUntilUs = audioClockBaseUs;
         m_audioClockMs.store(audioClockBaseUs / 1000);
-        // seek 鍚庢墍鏈夋棫 packet/frame 閮藉彲鑳芥潵鑷棫鏃堕棿绾匡紝閲嶇疆鏈湴鍚屾鍩哄噯鍚庢墠鍏佽缁х画鏄剧ず銆?        localSeekGeneration = currentGeneration;
+        // Reset local sync state before decoded preroll frames are allowed through.
+        localSeekGeneration = currentGeneration;
+        localAudioSeekTargetMs = m_seekTargetMs.load();
+        localVideoSeekTargetMs = localAudioSeekTargetMs;
         return audioDevice != nullptr || !audioSink;
     };
 
@@ -908,7 +1073,8 @@ void FFmpegPlaybackBackend::decodeLoop()
             }
 
             offset += writtenBytes;
-            // 鍙湁鐪熸鍐欏叆 QAudioSink 鐨勫瓧鑺傛墠鎺ㄨ繘鎻愪氦缁堢偣锛岄伩鍏嶆妸灏氭湭鎾斁鐨勮В鐮佹暟鎹畻杩涗富鏃堕挓銆?            audioSubmittedUntilUs += audioFormat.durationForBytes(static_cast<qint32>(writtenBytes));
+            // 只有真正写入 QAudioSink 的字节才推进已提交音频终点，避免把未播放数据算进 audio clock。
+            audioSubmittedUntilUs += audioFormat.durationForBytes(static_cast<qint32>(writtenBytes));
             updateAudioClock();
         }
 
@@ -943,7 +1109,15 @@ void FFmpegPlaybackBackend::decodeLoop()
                 continue;
             }
 
-            const qint64 framePosition = frameTimestampMs(audioFrame.get(), audioStream, m_positionMs.load());
+            const qint64 framePosition = frameTimestampMs(audioFrame.get(), audioTimeBase, m_positionMs.load());
+            if (localAudioSeekTargetMs >= 0
+                && framePosition + kSeekPrerollToleranceMs < localAudioSeekTargetMs) {
+                av_frame_unref(audioFrame.get());
+                continue;
+            }
+            if (localAudioSeekTargetMs >= 0) {
+                localAudioSeekTargetMs = -1;
+            }
             if (!audioClockStarted) {
                 audioClockBaseUs = boundedPosition(framePosition) * 1000;
                 audioSubmittedUntilUs = audioClockBaseUs;
@@ -993,14 +1167,17 @@ void FFmpegPlaybackBackend::decodeLoop()
                 return VideoSyncDecision::Drop;
             }
 
-            // 闊抽鏄富鏃堕挓锛氶煶棰戜竴鏃﹀啓鍏?QAudioSink锛屽氨鎸夊０鍗＄紦鍐插尯娑堣�楅噺鎺ㄨ繘鏃堕棿銆?            // 瑙嗛鍙瘮杈冭嚜宸辩殑 pts 涓?audio clock锛涗笉鍙嶅悜鎷夊姩闊抽锛岄伩鍏嶅０闊冲崱椤挎垨璺冲彉銆?            const qint64 audioClock = updateAudioClock();
+            // 音频作为主时钟；视频只比较自己的 PTS 和 audio clock，不反向拉动音频。
+            const qint64 audioClock = updateAudioClock();
             const qint64 diffMs = framePosition - audioClock;
 
-            // 瑙嗛鎱㈠お澶氭椂缁х画鏄剧ず鍙細閫犳垚鈥滆拷涓嶄笂鈥濈殑鎷栧奖锛岀洿鎺ヤ涪甯ц拷闊抽銆?            if (diffMs < -kVideoDropThresholdMs) {
+            // 视频落后音频太多时继续显示会造成明显拖影，直接丢帧追上音频。
+            if (diffMs < -kVideoDropThresholdMs) {
                 return VideoSyncDecision::Drop;
             }
 
-            // 瑙嗛蹇簡灏辩瓑闊抽 clock 杩戒笂锛涘皬浜庡蹇嶇獥鍙ｆ椂鐩存帴鏄剧ず锛屽噺灏戞姈鍔ㄣ�?            if (diffMs <= kVideoEarlyToleranceMs) {
+            // 视频快于 audio clock 时等待音频追上；进入容忍窗口后再显示，减少抖动。
+            if (diffMs <= kVideoEarlyToleranceMs) {
                 return VideoSyncDecision::Display;
             }
 
@@ -1046,14 +1223,23 @@ void FFmpegPlaybackBackend::decodeLoop()
                 continue;
             }
 
+            const qint64 framePosition = frameTimestampMs(videoFrame.get(),
+                                                          videoTimeBase,
+                                                          m_positionMs.load() + frameDelayMs);
+            if (localVideoSeekTargetMs >= 0
+                && framePosition + kSeekPrerollToleranceMs < localVideoSeekTargetMs) {
+                av_frame_unref(videoFrame.get());
+                continue;
+            }
+            if (localVideoSeekTargetMs >= 0) {
+                localVideoSeekTargetMs = -1;
+            }
+
             QImage image;
             QString errorMessage;
             SwsContext* rawSwsContext = swsContext.release();
             const bool converted = convertFrameToImage(videoFrame.get(), &rawSwsContext, &image, &errorMessage);
             swsContext.reset(rawSwsContext);
-            const qint64 framePosition = frameTimestampMs(videoFrame.get(),
-                                                          videoStream,
-                                                          m_positionMs.load() + frameDelayMs);
             av_frame_unref(videoFrame.get());
 
             if (!converted) {
@@ -1094,8 +1280,8 @@ void FFmpegPlaybackBackend::decodeLoop()
         {
             std::lock_guard<std::mutex> lock(m_decodeIoMutex);
             result = av_read_frame(m_formatContext, packet.get());
-            readVideoPacket = result >= 0 && packet->stream_index == m_videoStreamIndex;
-            readAudioPacket = result >= 0 && audioCodecContext && packet->stream_index == m_audioStreamIndex;
+            readVideoPacket = result >= 0 && packet->stream_index == localVideoStreamIndex;
+            readAudioPacket = result >= 0 && audioCodecContext && packet->stream_index == localAudioStreamIndex;
             if (readVideoPacket && readGeneration == m_seekGeneration.load()) {
                 attemptedSendPacket = true;
                 result = avcodec_send_packet(videoCodecContext.get(), packet.get());
@@ -1129,13 +1315,15 @@ void FFmpegPlaybackBackend::decodeLoop()
         }
         if (result < 0) {
             av_packet_unref(packet.get());
+            const QString streamName = readAudioPacket ? QStringLiteral("audio") : QStringLiteral("video");
             fail(attemptedSendPacket
-                     ? QStringLiteral("FFmpeg failed to send video packet to decoder: %1").arg(ffmpegErrorString(result))
+                     ? QStringLiteral("FFmpeg failed to send %1 packet to decoder: %2")
+                           .arg(streamName, ffmpegErrorString(result))
                      : QStringLiteral("FFmpeg failed to read video packet: %1").arg(ffmpegErrorString(result)));
             break;
         }
 
-        if (packet->stream_index != m_videoStreamIndex && packet->stream_index != m_audioStreamIndex) {
+        if (packet->stream_index != localVideoStreamIndex && packet->stream_index != localAudioStreamIndex) {
             av_packet_unref(packet.get());
             continue;
         }
@@ -1143,7 +1331,7 @@ void FFmpegPlaybackBackend::decodeLoop()
         const int packetStreamIndex = packet->stream_index;
         av_packet_unref(packet.get());
 
-        if (packetStreamIndex == m_audioStreamIndex) {
+        if (packetStreamIndex == localAudioStreamIndex) {
             if (!receiveAudioFrames()) {
                 break;
             }
@@ -1155,9 +1343,7 @@ void FFmpegPlaybackBackend::decodeLoop()
         }
     }
 
-    if (audioSink) {
-        audioSink->stop();
-    }
+    audioSink.reset();
 
     {
         std::lock_guard<std::mutex> lock(m_decodeIoMutex);
@@ -1171,10 +1357,14 @@ void FFmpegPlaybackBackend::decodeLoop()
 
     m_isPlaying.store(false);
     m_decodeFinished.store(true);
-    emit playbackStateChanged(PlaybackState::Stopped);
+    setPlaybackState(PlaybackState::Stopped);
     if (reachedEnd) {
         setMediaStatus(MediaStatus::EndOfMedia);
     }
+    qDebug() << "[FFmpegPlaybackBackend] decode stopped"
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load()
+             << "reachedEnd" << reachedEnd;
 }
 
 void FFmpegPlaybackBackend::closeInput()
@@ -1222,9 +1412,10 @@ bool FFmpegPlaybackBackend::validateLocalFile(const QString& filePath, QString* 
 
 bool FFmpegPlaybackBackend::fail(const QString& message)
 {
+    m_seekTargetMs.store(-1);
     setMediaStatus(MediaStatus::InvalidMedia);
-    emit playbackStateChanged(PlaybackState::Stopped);
-    emit errorOccurred(PlaybackError::FormatError, message);
+    setPlaybackState(PlaybackState::Stopped);
+    emitErrorOnce(PlaybackError::FormatError, message);
     return false;
 }
 
@@ -1253,13 +1444,54 @@ qint64 FFmpegPlaybackBackend::positionToStreamTimestamp(qint64 positionMs, int s
 
 int FFmpegPlaybackBackend::seekStreamIndex() const
 {
-    return m_audioStreamIndex >= 0 ? m_audioStreamIndex : m_videoStreamIndex;
+    return m_videoStreamIndex >= 0 ? m_videoStreamIndex : m_audioStreamIndex;
 }
 
-void FFmpegPlaybackBackend::setMediaStatus(MediaStatus status)
+void FFmpegPlaybackBackend::setPlaybackState(PlaybackState state, bool force)
 {
-    m_mediaStatus = status;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!force && m_playbackState == state) {
+            return;
+        }
+        m_playbackState = state;
+    }
+
+    emit playbackStateChanged(state);
+}
+
+void FFmpegPlaybackBackend::setMediaStatus(MediaStatus status, bool force)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!force && m_mediaStatus == status) {
+            return;
+        }
+        if (status != MediaStatus::InvalidMedia) {
+            m_errorEmittedForCurrentMedia = false;
+        }
+        m_mediaStatus = status;
+    }
+
     emit mediaStatusChanged(status);
+}
+
+void FFmpegPlaybackBackend::emitErrorOnce(PlaybackError error, const QString& message)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_errorEmittedForCurrentMedia) {
+            return;
+        }
+        m_errorEmittedForCurrentMedia = true;
+    }
+
+    qDebug() << "[FFmpegPlaybackBackend] failure"
+             << "category" << failureCategory(message)
+             << "file" << m_filePath
+             << "positionMs" << m_positionMs.load()
+             << "message" << message;
+    emit errorOccurred(error, message);
 }
 
 #endif // USE_FFMPEG

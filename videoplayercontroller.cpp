@@ -324,6 +324,9 @@ bool VideoPlayerController::open(const QString& filePath, bool localFile)
             m_historyCoordinator->setCurrentVideo(filePath);
         }
         m_playbackController->openLocalFile(filePath);
+        if (m_playbackController->mediaStatus() == IPlaybackBackend::MediaStatus::InvalidMedia) {
+            return false;
+        }
         if (m_historyCoordinator) {
             m_historyCoordinator->maybeMarkPlaybackStarted(duration());
         }
@@ -401,9 +404,12 @@ void VideoPlayerController::togglePlayback()
 
 void VideoPlayerController::jump(bool forward, int ms)
 {
-    if (m_playbackController) {
-        m_playbackController->jump(forward, ms);
+    if (!m_playbackController) {
+        return;
     }
+
+    const qint64 currentPosition = m_playbackController->position();
+    seekToPosition(forward ? currentPosition + ms : currentPosition - ms);
 }
 
 void VideoPlayerController::seekToPosition(qint64 positionValue)
@@ -725,22 +731,9 @@ void VideoPlayerController::onMediaStatusChanged(IPlaybackBackend::MediaStatus s
         if (m_playbackController) {
             m_playbackController->stop();
         }
-        const bool localFile = !m_currentVideoPath.trimmed().isEmpty();
-        if (localFile) {
-            const LocalPlaybackDiagnosis diagnosis =
-                LocalPlaybackDiagnostics::diagnose(m_currentVideoPath,
-                                                   IPlaybackBackend::PlaybackError::FormatError,
-                                                   QString());
-            emit warningRequested(diagnosis.title, diagnosis.message);
-            if (playNextQueuedVideo()) {
-                return;
-            }
-            return;
+        if (m_currentVideoPath.trimmed().isEmpty()) {
+            m_currentOnlinePlaybackFailed = true;
         }
-
-        m_currentOnlinePlaybackFailed = true;
-        emit warningRequested(QStringLiteral("\u64ad\u653e\u5730\u5740\u65e0\u6548"),
-                              withOnlineVideoRetryHint(QStringLiteral("\u65e0\u6cd5\u52a0\u8f7d\u5f53\u524d\u89c6\u9891\uff1a\u5728\u7ebf\u64ad\u653e\u5730\u5740\u53ef\u80fd\u5df2\u8fc7\u671f\u3001\u4e3a\u7a7a\u6216\u88ab\u9632\u76d7\u94fe\u62e6\u622a\u3002")));
         return;
     }
 }

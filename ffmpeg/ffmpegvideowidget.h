@@ -19,8 +19,14 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    void deliverPendingFrame();
+    void storeFrame(const QImage& frame);
+
     mutable QMutex m_frameMutex;
     QImage m_frame;
+    QImage m_pendingFrame;
+    bool m_deliveryPending = false;
+    bool m_updatePending = false;
 };
 
 #endif // FFMPEGVIDEOWIDGET_H

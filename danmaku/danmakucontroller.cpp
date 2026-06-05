@@ -41,11 +41,17 @@ void DanmakuController::setOverlayGeometry(const QRect& geometry)
 void DanmakuController::startSync()
 {
     m_syncActive = true;
+    if (m_overlayWidget) {
+        m_overlayWidget->setPaused(false);
+    }
 }
 
 void DanmakuController::stopSync()
 {
     m_syncActive = false;
+    if (m_overlayWidget) {
+        m_overlayWidget->setPaused(true);
+    }
 }
 
 void DanmakuController::resetSyncPosition(qint64 position)
@@ -99,6 +105,7 @@ void DanmakuController::clearVideo()
 
     if (m_overlayWidget) {
         m_overlayWidget->clear();
+        m_overlayWidget->setPaused(false);
     }
     if (m_listDisplay) {
         m_listDisplay->clearPanel();

@@ -46,6 +46,20 @@ bool DanmakuOverlay::isEnabled() const
     return m_enabled;
 }
 
+void DanmakuOverlay::setPaused(bool paused)
+{
+    if (m_paused == paused) {
+        return;
+    }
+
+    m_paused = paused;
+}
+
+bool DanmakuOverlay::isPaused() const
+{
+    return m_paused;
+}
+
 void DanmakuOverlay::setSpeed(int speedValue)
 {
     m_speed = qBound(50, speedValue, 300);
@@ -154,7 +168,7 @@ void DanmakuOverlay::resizeEvent(QResizeEvent* event)
 
 void DanmakuOverlay::updateDanmaku()
 {
-    if (!m_enabled) {
+    if (!m_enabled || m_paused) {
         return;
     }
 

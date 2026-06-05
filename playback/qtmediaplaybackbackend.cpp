@@ -21,16 +21,18 @@ QtMediaPlaybackBackend::QtMediaPlaybackBackend(QObject* parent)
             this, &QtMediaPlaybackBackend::durationChanged);
     connect(m_player, &QMediaPlayer::playbackStateChanged,
             this, [this](QMediaPlayer::PlaybackState state) {
-                emit playbackStateChanged(toBackendPlaybackState(state));
+                setPlaybackState(toBackendPlaybackState(state));
             });
     connect(m_player, &QMediaPlayer::mediaStatusChanged,
             this, [this](QMediaPlayer::MediaStatus status) {
-                emit mediaStatusChanged(toBackendMediaStatus(status));
+                setMediaStatus(toBackendMediaStatus(status));
             });
     connect(m_player, &QMediaPlayer::errorOccurred,
             this, [this](QMediaPlayer::Error error, const QString& errorString) {
                 if (error != QMediaPlayer::NoError) {
-                    emit errorOccurred(toBackendPlaybackError(error), errorString);
+                    setMediaStatus(MediaStatus::InvalidMedia);
+                    setPlaybackState(PlaybackState::Stopped);
+                    emitErrorOnce(toBackendPlaybackError(error), errorString);
                 }
             });
 }
@@ -52,27 +54,44 @@ void QtMediaPlaybackBackend::setVideoOutput(QVideoWidget* videoOutput)
 
 void QtMediaPlaybackBackend::openLocalFile(const QString& filePath)
 {
+    m_errorEmittedForCurrentMedia = false;
+    setMediaStatus(MediaStatus::Loading, true);
+    setPlaybackState(PlaybackState::Stopped);
     m_player->setSource(QUrl::fromLocalFile(filePath));
 }
 
 void QtMediaPlaybackBackend::openUrl(const QUrl& url)
 {
+    m_errorEmittedForCurrentMedia = false;
+    setMediaStatus(MediaStatus::Loading, true);
+    setPlaybackState(PlaybackState::Stopped);
     m_player->setSource(url);
 }
 
 void QtMediaPlaybackBackend::play()
 {
+    if (m_player->source().isEmpty()) {
+        setMediaStatus(MediaStatus::InvalidMedia);
+        setPlaybackState(PlaybackState::Stopped);
+        emitErrorOnce(PlaybackError::ResourceError,
+                      QStringLiteral("No media source is loaded."));
+        return;
+    }
+
     m_player->play();
+    setPlaybackState(PlaybackState::Playing);
 }
 
 void QtMediaPlaybackBackend::pause()
 {
     m_player->pause();
+    setPlaybackState(PlaybackState::Paused);
 }
 
 void QtMediaPlaybackBackend::stop()
 {
     m_player->stop();
+    setPlaybackState(PlaybackState::Stopped);
 }
 
 void QtMediaPlaybackBackend::seek(qint64 position)
@@ -113,12 +132,12 @@ qint64 QtMediaPlaybackBackend::duration() const
 
 IPlaybackBackend::MediaStatus QtMediaPlaybackBackend::mediaStatus() const
 {
-    return toBackendMediaStatus(m_player->mediaStatus());
+    return m_mediaStatus;
 }
 
 IPlaybackBackend::PlaybackState QtMediaPlaybackBackend::playbackState() const
 {
-    return toBackendPlaybackState(m_player->playbackState());
+    return m_playbackState;
 }
 
 bool QtMediaPlaybackBackend::isPlaying() const
@@ -148,10 +167,9 @@ IPlaybackBackend::MediaStatus QtMediaPlaybackBackend::toBackendMediaStatus(int s
     case QMediaPlayer::LoadingMedia:
         return MediaStatus::Loading;
     case QMediaPlayer::LoadedMedia:
-        return MediaStatus::Loaded;
     case QMediaPlayer::BufferingMedia:
     case QMediaPlayer::BufferedMedia:
-        return MediaStatus::Buffered;
+        return MediaStatus::Loaded;
     case QMediaPlayer::EndOfMedia:
         return MediaStatus::EndOfMedia;
     case QMediaPlayer::InvalidMedia:
@@ -179,6 +197,40 @@ IPlaybackBackend::PlaybackError QtMediaPlaybackBackend::toBackendPlaybackError(i
     }
 
     return PlaybackError::UnknownError;
+}
+
+void QtMediaPlaybackBackend::setPlaybackState(PlaybackState state, bool force)
+{
+    if (!force && m_playbackState == state) {
+        return;
+    }
+
+    m_playbackState = state;
+    emit playbackStateChanged(state);
+}
+
+void QtMediaPlaybackBackend::setMediaStatus(MediaStatus status, bool force)
+{
+    if (!force && m_mediaStatus == status) {
+        return;
+    }
+
+    if (status != MediaStatus::InvalidMedia) {
+        m_errorEmittedForCurrentMedia = false;
+    }
+
+    m_mediaStatus = status;
+    emit mediaStatusChanged(status);
+}
+
+void QtMediaPlaybackBackend::emitErrorOnce(PlaybackError error, const QString& message)
+{
+    if (m_errorEmittedForCurrentMedia) {
+        return;
+    }
+
+    m_errorEmittedForCurrentMedia = true;
+    emit errorOccurred(error, message);
 }
 
 qint64 QtMediaPlaybackBackend::boundedPosition(qint64 requestedPosition) const

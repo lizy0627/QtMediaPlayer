@@ -50,6 +50,11 @@ QString VideoCapture::captureScreenshot()
 
 QString VideoCapture::captureScreenshot(const QString& filePath, qint64 positionMs)
 {
+    const QPixmap currentFrame = captureCurrentFrame();
+    if (!currentFrame.isNull()) {
+        return saveScreenshotImage(currentFrame.toImage());
+    }
+
     if (m_frameCaptureService && !filePath.trimmed().isEmpty()) {
         const QImage image = m_frameCaptureService->captureVideoFrame(filePath, positionMs);
         if (!image.isNull()) {

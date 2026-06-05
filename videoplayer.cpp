@@ -262,6 +262,10 @@ void VideoPlayerWidget::setUseFFmpegBackend(bool enabled)
         return;
     }
 
+    m_playbackController->setLocalFileBackendPolicy(
+        enabled
+            ? VideoPlaybackController::LocalFileBackendPolicy::PreferFFmpeg
+            : VideoPlaybackController::LocalFileBackendPolicy::PreferQtMedia);
     m_videoSurface->setRenderer(enabled
                                     ? VideoRenderContainer::Renderer::FFmpegVideo
                                     : VideoRenderContainer::Renderer::QtVideo);

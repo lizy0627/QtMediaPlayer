@@ -22,6 +22,8 @@ public:
     bool isEnabled() const;
     void setSpeed(int speed);
     int speed() const;
+    void setPaused(bool paused);
+    bool isPaused() const;
     void setMaxDanmakuOnScreen(int max);
     int maxDanmakuOnScreen() const;
 
@@ -55,6 +57,7 @@ private:
     QVector<DanmakuItem> m_danmakuQueue;
     QTimer* m_updateTimer = nullptr;
     bool m_enabled = true;
+    bool m_paused = false;
     int m_maxDanmakuOnScreen = 50;
     int m_speed = 150;
     QVector<int> m_trackOccupied;

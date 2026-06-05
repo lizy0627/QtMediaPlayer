@@ -62,7 +62,9 @@ private:
     qint64 boundedPosition(qint64 requestedPosition) const;
     qint64 positionToStreamTimestamp(qint64 positionMs, int streamIndex) const;
     int seekStreamIndex() const;
-    void setMediaStatus(MediaStatus status);
+    void setPlaybackState(PlaybackState state, bool force = false);
+    void setMediaStatus(MediaStatus status, bool force = false);
+    void emitErrorOnce(PlaybackError error, const QString& message);
 
     AVFormatContext* m_formatContext = nullptr;
     AVCodecContext* m_videoCodecContext = nullptr;
@@ -84,10 +86,13 @@ private:
     std::condition_variable m_stateChanged;
     bool m_stopRequested = false;
     bool m_pauseRequested = false;
+    PlaybackState m_playbackState = PlaybackState::Stopped;
     MediaStatus m_mediaStatus = MediaStatus::NoMedia;
+    bool m_errorEmittedForCurrentMedia = false;
     std::atomic_bool m_decodeFinished { false };
     std::atomic_bool m_isPlaying { false };
     std::atomic<quint64> m_seekGeneration { 0 };
+    std::atomic<qint64> m_seekTargetMs { -1 };
 };
 
 #endif // USE_FFMPEG
